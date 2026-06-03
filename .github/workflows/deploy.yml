@@ -3,7 +3,13 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches:
-      - 'release/v*'
+      - main
+  workflow_dispatch:
+
+# Only one concurrent deploy at a time, but don't cancel in-progress runs
+concurrency:
+  group: pages
+  cancel-in-progress: false
 
 jobs:
   build:
