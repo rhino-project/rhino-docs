@@ -1,9 +1,12 @@
 import React from 'react';
+import useBaseUrl from '@docusaurus/useBaseUrl';
 import {Icon} from './Primitives';
 
 const GITHUB_URL = 'https://github.com/rhino-project';
 
 export function Nav() {
+  const introUrl = useBaseUrl('/intro');
+  const laravelStartUrl = useBaseUrl('/server/getting-started');
   return (
     <nav className="ag-nav">
       <div className="ag-nav-inner">
@@ -17,7 +20,7 @@ export function Nav() {
             <a href="#blueprint">Blueprint</a>
             <a href="#features">Features</a>
             <a href="#demo">Demo</a>
-            <a href="/intro">Docs</a>
+            <a href={introUrl}>Docs</a>
           </div>
         </div>
         <div style={{display: 'flex', alignItems: 'center', gap: 10}}>
@@ -36,12 +39,12 @@ export function Nav() {
             <Icon.github />
             <span>GitHub</span>
           </a>
-          <a className="ag-btn" href="/intro" style={{padding: '9px 14px', fontSize: 13}}>
+          <a className="ag-btn" href={introUrl} style={{padding: '9px 14px', fontSize: 13}}>
             Docs
           </a>
           <a
             className="ag-btn ag-btn-primary"
-            href="/server/getting-started"
+            href={laravelStartUrl}
             style={{padding: '9px 14px', fontSize: 13}}>
             Get started
           </a>

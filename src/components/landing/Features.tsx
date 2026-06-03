@@ -1,4 +1,5 @@
 import React from 'react';
+import useBaseUrl from '@docusaurus/useBaseUrl';
 import {Reveal, Eyebrow, Button, Pill, Icon} from './Primitives';
 
 type Feature = {
@@ -129,6 +130,7 @@ function FeatureCard({f, i}: {f: Feature; i: number}) {
 }
 
 export function Features() {
+  const introUrl = useBaseUrl('/intro');
   return (
     <section className="ag-section" id="features" style={{position: 'relative'}}>
       <div className="ag-wrap">
@@ -155,7 +157,7 @@ export function Features() {
           <Reveal delay={160}>
             <div style={{display: 'flex', alignItems: 'center', gap: 14}}>
               <span style={{color: 'var(--ag-fg-muted)', fontSize: 14}}>+22 more</span>
-              <Button href="/intro">
+              <Button href={introUrl}>
                 <span>All 28 features</span>
                 <Icon.arrow className="ag-arrow" />
               </Button>

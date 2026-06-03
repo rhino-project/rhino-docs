@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {useHistory, useLocation} from '@docusaurus/router';
+import useBaseUrl from '@docusaurus/useBaseUrl';
 import { LaravelIcon, RailsIcon, ReactIcon, NestIcon } from './FrameworkIcons';
 
 const DjangoIcon = () => (
@@ -54,13 +55,24 @@ const categories: FrameworkCategory[] = [
   },
 ];
 
-const allFrameworks = categories.flatMap((c) => c.items);
-
 export default function FrameworkDropdown(): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const history = useHistory();
   const location = useLocation();
+
+  // Prefix every internal href with the site's baseUrl so production
+  // deploys at /rhino-docs/ resolve correctly (and dev at / still works).
+  const baseUrl = useBaseUrl('/');
+  const baseTrim = baseUrl.replace(/\/$/, '');
+  const localCategories = categories.map((c) => ({
+    ...c,
+    items: c.items.map((i) => ({
+      ...i,
+      href: i.href ? baseTrim + i.href : i.href,
+    })),
+  }));
+  const allFrameworks = localCategories.flatMap((c) => c.items);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -91,7 +103,7 @@ export default function FrameworkDropdown(): React.JSX.Element {
 
       {open && (
         <div className="framework-dropdown__menu">
-          {categories.map((category, catIdx) => (
+          {localCategories.map((category, catIdx) => (
             <React.Fragment key={category.label}>
               {catIdx > 0 && <div className="framework-dropdown__divider" />}
               <div className="framework-dropdown__category">{category.label}</div>

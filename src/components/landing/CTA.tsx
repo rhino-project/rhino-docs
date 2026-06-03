@@ -1,4 +1,5 @@
 import React from 'react';
+import useBaseUrl from '@docusaurus/useBaseUrl';
 import {Reveal, Eyebrow, Button, Icon} from './Primitives';
 
 const GITHUB_URL = 'https://github.com/rhino-project';
@@ -49,6 +50,13 @@ function FooterCol({title, items}: {title: string; items: {label: string; href: 
 }
 
 export function CTA() {
+  const introUrl = useBaseUrl('/intro');
+  const laravelUrl = useBaseUrl('/server/getting-started');
+  const railsUrl = useBaseUrl('/rails/getting-started');
+  const nestjsUrl = useBaseUrl('/nestjs/getting-started');
+  const reactUrl = useBaseUrl('/react/getting-started');
+  const reactNativeUrl = useBaseUrl('/react-native/getting-started');
+  const blueprintUrl = useBaseUrl('/server/blueprint');
   return (
     <section className="ag-section" id="cta" style={{position: 'relative', overflow: 'hidden'}}>
       <div className="ag-ambient-glow" style={{top: '10%', opacity: 0.4}} />
@@ -101,7 +109,7 @@ export function CTA() {
               </Reveal>
               <Reveal delay={240}>
                 <div style={{display: 'flex', gap: 10, marginTop: 28, flexWrap: 'wrap'}}>
-                  <Button variant="primary" href="/intro">
+                  <Button variant="primary" href={introUrl}>
                     Read the docs <Icon.arrow className="ag-arrow" />
                   </Button>
                   <Button href={GITHUB_URL} target="_blank" rel="noreferrer">
@@ -186,24 +194,24 @@ export function CTA() {
           <FooterCol
             title="Servers"
             items={[
-              {label: 'Laravel', href: '/server/getting-started'},
-              {label: 'Rails', href: '/rails/getting-started'},
-              {label: 'NestJS', href: '/nestjs/getting-started'},
+              {label: 'Laravel', href: laravelUrl},
+              {label: 'Rails', href: railsUrl},
+              {label: 'NestJS', href: nestjsUrl},
             ]}
           />
           <FooterCol
             title="Clients"
             items={[
-              {label: 'React', href: '/react/getting-started'},
-              {label: 'React Native', href: '/react-native/getting-started'},
+              {label: 'React', href: reactUrl},
+              {label: 'React Native', href: reactNativeUrl},
             ]}
           />
           <FooterCol
             title="More"
             items={[
-              {label: 'Docs', href: '/intro'},
+              {label: 'Docs', href: introUrl},
               {label: 'GitHub', href: GITHUB_URL},
-              {label: 'Blueprint', href: '/server/blueprint'},
+              {label: 'Blueprint', href: blueprintUrl},
             ]}
           />
         </footer>
