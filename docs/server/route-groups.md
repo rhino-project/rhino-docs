@@ -15,6 +15,7 @@ Define route groups in `config/rhino.php`:
 'route_groups' => [
     'group-name' => [
         'prefix' => 'url-prefix',           // URL prefix for routes
+        'domain' => null,                    // optional host constraint (see Domain Constraints)
         'middleware' => [SomeMiddleware::class], // middleware stack (on top of auth:sanctum)
         'models' => '*',                     // '*' for all models, or ['posts', 'comments']
     ],
@@ -36,6 +37,73 @@ All other group names (e.g., `'driver'`, `'admin'`, `'default'`) are standard au
 
 - `'models' => '*'` — registers all models from `config('rhino.models')`
 - `'models' => ['posts', 'categories']` — registers only the specified model slugs
+
+### Domain Constraints
+
+A route group can be constrained to a specific host with the optional `'domain'`
+key. This lets two groups share the same `'prefix'` while living on different
+domains. Under the hood it uses Laravel's `Route::domain()`.
+
+```php title="config/rhino.php"
+'route_groups' => [
+    // Only matches requests to admin.example.com
+    'admin' => [
+        'prefix' => '',
+        'domain' => 'admin.example.com',
+        'middleware' => [],
+        'models' => '*',
+    ],
+],
+```
+
+Semantics:
+
+| `'domain'` value                | Behavior                                                                       |
+|---------------------------------|--------------------------------------------------------------------------------|
+| omitted / `null` / `''`         | Matches **any** host (default, fully backward compatible)                       |
+| `'admin.example.com'`           | Group's routes match **only** that exact host; other hosts get a 404            |
+| `'{organization}.example.com'`  | Matches that host pattern and binds `{organization}`, feeding org resolution    |
+
+`'domain'` and `'prefix'` are independent and combine — a group may have both.
+
+:::warning Conflicting groups fail fast
+Two groups that share the same prefix **and** overlapping models **and** an
+intersecting host-set would silently shadow each other. Rhino validates the
+config at boot and throws a `RouteGroupConflictException` in that case. The fix
+is to give them distinct prefixes, distinguish them with different `'domain'`
+values, or make their `'models'` disjoint. A group without a `'domain'` matches
+every host, so it intersects with all others.
+:::
+
+#### Subdomain multi-tenancy
+
+A **parameterized** domain binds a host segment as a route parameter. Because
+Laravel exposes domain parameters as route parameters, `{organization}` flows
+into `ResolveOrganizationFromRoute` exactly like the path-prefix `{organization}`
+does — so subdomain multitenancy works with no extra wiring:
+
+```php title="config/rhino.php"
+'route_groups' => [
+    'tenant' => [
+        'prefix' => '',
+        'domain' => '{organization}.example.com',
+        'middleware' => [\App\Http\Middleware\ResolveOrganizationFromRoute::class],
+        'models' => '*',
+    ],
+],
+'multi_tenant' => [
+    'organization_identifier_column' => 'slug',
+],
+```
+
+A request to `org-one.example.com` resolves the `org-one` organization (by the
+configured identifier column) and scopes all data to it. Requests to an unknown
+subdomain — or to an organization the authenticated user does not belong to —
+return `404`. A domain parameter matches a single label only, so `example.com`
+(no subdomain) does not match.
+
+When the `'tenant'` group declares a domain, the tenant-scoped invitation and
+nested (`/nested`) routes inherit that same domain constraint.
 
 ## Examples
 

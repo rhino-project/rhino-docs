@@ -81,18 +81,29 @@ GET https://acme-corp.yourapp.com/api/posts
 GET https://other-org.yourapp.com/api/posts
 ```
 
-Uses `ResolveOrganizationFromSubdomain` middleware. Enable it:
+This is expressed with a **parameterized `domain`** on the tenant route group.
+The captured `{organization}` segment is bound as a route parameter, so the
+standard `ResolveOrganizationFromRoute` middleware resolves it exactly as it does
+for a path prefix:
 
 ```php title="config/rhino.php"
+'route_groups' => [
+    'tenant' => [
+        'prefix' => '',
+        'domain' => '{organization}.yourapp.com',
+        'middleware' => [\App\Http\Middleware\ResolveOrganizationFromRoute::class],
+        'models' => '*',
+    ],
+],
 'multi_tenant' => [
-    'enabled' => true,
-    'use_subdomain' => true,
+    'organization_identifier_column' => 'slug',
 ],
 ```
 
-:::info Skipped Subdomains
-The subdomain middleware automatically skips these common subdomains: `www`, `app`, `api`, `localhost`, `127.0.0.1`. Requests from these are treated as non-tenant.
-:::
+See [Route Groups → Domain Constraints](./route-groups.md#domain-constraints) for
+the full semantics. A domain parameter matches a single host label, so an
+apex request like `yourapp.com/api/posts` does not match the tenant group — keep
+non-tenant subdomains (e.g. `www`, `app`) on their own group or host.
 
 ## Scoping Models
 

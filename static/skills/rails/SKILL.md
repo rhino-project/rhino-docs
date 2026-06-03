@@ -27,7 +27,7 @@ Rhino auto-generates a complete REST API from your model definitions. Here is ev
 | 13 | **Eager Loading (Includes)** | `?include=user,comments` with nested support (`comments.user`). Count (`commentsCount`) and existence (`commentsExists`) suffixes. Authorization checked per include. |
 | 14 | **Multi-Tenancy** | Organization-based data isolation via `BelongsToOrganization` concern. Auto-sets `organization_id` via `RequestStore`, default scope filters queries. Route-prefix or subdomain resolution. |
 | 15 | **Nested Ownership Auto-Detection** | Models without direct `organization_id` are scoped by walking `belongs_to` chains (e.g., Comment → Post → Blog → Organization). |
-| 16 | **Route Groups** | Multiple URL prefixes with different middleware/auth per group. Reserved names: `:tenant` (org-scoped + invitations) and `:public` (no auth). |
+| 16 | **Route Groups** | Multiple URL prefixes with different middleware/auth per group, optionally constrained to a host via `domain:` (literal or `{organization}.example.com` for subdomain multitenancy). Reserved names: `:tenant` (org-scoped + invitations) and `:public` (no auth). |
 | 17 | **Soft Deletes** | Via Discard gem (`discarded_at`). `DELETE` soft-deletes, plus `GET /trashed`, `POST /restore`, `DELETE /force-delete` endpoints. Each with its own permission. |
 | 18 | **Audit Trail** | `HasAuditTrail` concern logs all CRUD events with old/new values, user, IP, user-agent, and organization context via `RequestStore`. |
 | 19 | **Nested Operations** | `POST /nested` for atomic multi-model transactions. `$N.field` references between operations. All-or-nothing rollback. |
@@ -1065,6 +1065,27 @@ All other names (`:driver`, `:admin`, `:default`) are standard authenticated gro
 
 - `models: :all` -- all models from `config.models`
 - `models: [:posts, :categories]` -- only specified slugs
+
+### Domain Constraints
+
+Optional `domain:` keyword constrains a group to a host. Two groups can share a `prefix:` on different domains.
+
+| `domain:` | Behavior |
+|---|---|
+| omitted / `nil` / `''` | Matches any host (default, backward compatible) |
+| `'admin.example.com'` | Matches only that exact host; other hosts get 404 |
+| `'{organization}.example.com'` | Matches the pattern, captures `{organization}`, feeds org resolution like the path prefix `:organization` |
+
+`domain:` and `prefix:` are independent and combine. Implemented by `Rhino::Routing::DomainConstraint`: compiles the pattern to an anchored, case-insensitive regex (`{name}` -> `(?<name>[^.]+)`, single label only) and injects captures into `request.path_parameters` so `ResolveOrganizationFromRoute` / the controller resolve the org from the subdomain.
+
+```ruby
+# Subdomain multi-tenancy: org-one.example.com scopes to org-one
+config.route_group :tenant, prefix: '', domain: '{organization}.example.com',
+  middleware: [Rhino::Middleware::ResolveOrganizationFromRoute], models: :all
+config.multi_tenant = { organization_identifier_column: 'slug' }
+```
+
+Unknown subdomain or a non-member organization -> 404. `example.com` (no label) and `a.b.example.com` (multi-label) do not match `{organization}.example.com`. When `:tenant` has a domain, its invitation + nested routes inherit that domain.
 
 ### Examples
 

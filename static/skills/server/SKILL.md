@@ -25,7 +25,7 @@ Rhino auto-generates a complete REST API from your model definitions. Here is ev
 | 13 | **Eager Loading (Includes)** | `?include=user,comments` with nested support (`comments.user`). Count (`commentsCount`) and existence (`commentsExists`) suffixes. Authorization checked per include. |
 | 14 | **Multi-Tenancy** | Organization-based data isolation via `BelongsToOrganization` trait. Auto-sets `organization_id`, global scope filters queries. Route-prefix or subdomain resolution. |
 | 15 | **Nested Ownership Auto-Detection** | Models without direct `organization_id` are scoped by walking `BelongsTo` chains (e.g., Comment → Post → Blog → Organization). |
-| 16 | **Route Groups** | Multiple URL prefixes with different middleware/auth per group. Reserved names: `tenant` (org-scoped + invitations) and `public` (no auth). |
+| 16 | **Route Groups** | Multiple URL prefixes (and optional per-group `domain`/host constraints) with different middleware/auth per group. Reserved names: `tenant` (org-scoped + invitations) and `public` (no auth). |
 | 17 | **Soft Deletes** | `DELETE` soft-deletes, plus `GET /trashed`, `POST /restore`, `DELETE /force-delete` endpoints. Each with its own permission. |
 | 18 | **Audit Trail** | `HasAuditTrail` trait logs all CRUD events with old/new values, user, IP, user-agent, and organization context. |
 | 19 | **Nested Operations** | `POST /nested` for atomic multi-model transactions. `$N.field` references between operations. All-or-nothing rollback. |
@@ -1202,10 +1202,33 @@ $user->hasPermission('posts.store', $otherOrg);   // false (viewer)
 'route_groups' => [
     'group-name' => [
         'prefix' => 'url-prefix',
+        'domain' => null, // optional host constraint (see Domain Constraints)
         'middleware' => [SomeMiddleware::class],
         'models' => '*', // or ['posts', 'comments']
     ],
 ],
+```
+
+### Domain Constraints
+
+A group can be scoped to a host with the optional `'domain'` key (uses Laravel `Route::domain()`). Two groups can share a `'prefix'` and be selected by host.
+
+- omitted / `null` / `''` -- matches any host (default, backward compatible)
+- `'admin.example.com'` -- only that exact host; other hosts 404
+- `'{organization}.example.com'` -- parameterized; the captured `{organization}` is a route parameter, so `ResolveOrganizationFromRoute` resolves the org from the subdomain (subdomain multitenancy, no extra wiring). Unknown/non-member subdomain -> 404. Matches a single host label only.
+
+`'domain'` and `'prefix'` combine. When the `'tenant'` group has a domain, its invitation and `/nested` routes inherit it.
+
+```php
+'route_groups' => [
+    'tenant' => [
+        'prefix' => '',
+        'domain' => '{organization}.example.com',
+        'middleware' => [ResolveOrganizationFromRoute::class],
+        'models' => '*',
+    ],
+],
+'multi_tenant' => ['organization_identifier_column' => 'slug'],
 ```
 
 ### Reserved Group Names

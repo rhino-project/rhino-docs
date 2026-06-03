@@ -33,6 +33,66 @@ All other group names (e.g., `:driver`, `:admin`, `:default`) are standard authe
 - `models: :all` — registers all models from `config.models`
 - `models: [:posts, :categories]` — registers only the specified model slugs
 
+### Domain Constraints
+
+A route group can be constrained to a specific host with the optional `domain:`
+keyword. This lets two groups share the same `prefix:` while living on different
+domains.
+
+```ruby title="config/initializers/rhino.rb"
+Rhino.configure do |config|
+  config.model :posts, 'Post'
+
+  # Only matches requests to admin.example.com
+  config.route_group :admin, prefix: '', domain: 'admin.example.com', models: :all
+end
+```
+
+Semantics:
+
+| `domain:` value                  | Behavior                                                                                 |
+|----------------------------------|------------------------------------------------------------------------------------------|
+| omitted / `nil` / `''`           | Matches **any** host (default, fully backward compatible)                                 |
+| `'admin.example.com'`            | Group's routes match **only** that exact host; other hosts get a 404                      |
+| `'{organization}.example.com'`   | Matches that host pattern and captures `{organization}`, feeding org resolution           |
+
+`domain:` and `prefix:` are independent and combine — a group may have both.
+
+#### Subdomain multi-tenancy
+
+A **parameterized** domain captures a single host label and exposes it exactly
+like the path-prefix `:organization` parameter, so subdomain multitenancy works
+out of the box:
+
+```ruby title="config/initializers/rhino.rb"
+Rhino.configure do |config|
+  config.model :posts, 'Post'
+
+  config.route_group :tenant,
+    prefix: '',
+    domain: '{organization}.example.com',
+    middleware: [Rhino::Middleware::ResolveOrganizationFromRoute],
+    models: :all
+
+  config.multi_tenant = { organization_identifier_column: 'slug' }
+end
+```
+
+A request to `org-one.example.com` resolves the `org-one` organization (by the
+configured identifier column) and scopes all data to it. Requests to an unknown
+subdomain — or to an organization the authenticated user does not belong to —
+return `404`. The capture matches a single label only, so `example.com` (no
+subdomain) and `a.b.example.com` (multi-label) do **not** match.
+
+When the `:tenant` group declares a domain, the tenant-scoped invitation and
+nested (`/nested`) routes inherit that same domain constraint.
+
+Internally the constraint is implemented by `Rhino::Routing::DomainConstraint`,
+which compiles the pattern to an anchored, case-insensitive regex (`{name}`
+becomes `(?<name>[^.]+)`) and injects captured values into the request's path
+parameters so `ResolveOrganizationFromRoute` (and the controller) resolve the
+organization from the subdomain.
+
 ## Examples
 
 ### Simple Non-Tenant App
