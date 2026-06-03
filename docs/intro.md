@@ -10,6 +10,56 @@ Rhino is a full-stack library that turns your models into a complete REST API �
 
 **Register a model. Get an API. Use a hook.**
 
+## Pick your stack
+
+Jump straight to the docs for your framework:
+
+<div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem', marginTop: '1rem', marginBottom: '2rem'}}>
+
+<div style={{border: '1px solid var(--ifm-color-emphasis-300)', borderRadius: '8px', padding: '1.25rem'}}>
+
+### Laravel
+
+Eloquent models, policies, validation, multi-tenancy.
+
+**[Get started →](./server/getting-started)**
+
+</div>
+
+<div style={{border: '1px solid var(--ifm-color-emphasis-300)', borderRadius: '8px', padding: '1.25rem'}}>
+
+### Rails
+
+ActiveRecord, Pundit policies, the same powerful features.
+
+**[Get started →](./rails/getting-started)**
+
+</div>
+
+<div style={{border: '1px solid var(--ifm-color-emphasis-300)', borderRadius: '8px', padding: '1.25rem'}}>
+
+### NestJS
+
+TypeScript, Prisma, decorators, dependency injection.
+
+**[Get started →](./nestjs/getting-started)**
+
+</div>
+
+<div style={{border: '1px solid var(--ifm-color-emphasis-300)', borderRadius: '8px', padding: '1.25rem'}}>
+
+### React Client
+
+Hooks for auth, CRUD, pagination, includes.
+
+**[Get started →](./react/getting-started)**
+
+</div>
+
+</div>
+
+Or keep reading for the architecture overview and a Hello World example.
+
 ## How It Works
 
 ```
@@ -158,48 +208,3 @@ function Posts() {
 }
 ```
 
-## What's Next?
-
-<div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginTop: '1rem'}}>
-
-<div style={{border: '1px solid var(--ifm-color-emphasis-300)', borderRadius: '8px', padding: '1.5rem'}}>
-
-### Laravel Server
-
-Set up your backend with Eloquent models, validation, permissions, and multi-tenancy.
-
-**[Get Started →](./server/getting-started)**
-
-</div>
-
-<div style={{border: '1px solid var(--ifm-color-emphasis-300)', borderRadius: '8px', padding: '1.5rem'}}>
-
-### Rails Server
-
-Set up your backend with ActiveRecord models, concerns, and the same powerful features.
-
-**[Get Started →](./rails/getting-started)**
-
-</div>
-
-<div style={{border: '1px solid var(--ifm-color-emphasis-300)', borderRadius: '8px', padding: '1.5rem'}}>
-
-### NestJS Server
-
-Set up your backend with NestJS, Prisma, and TypeScript-powered models.
-
-**[Get Started →](./nestjs/getting-started)**
-
-</div>
-
-<div style={{border: '1px solid var(--ifm-color-emphasis-300)', borderRadius: '8px', padding: '1.5rem'}}>
-
-### React Client
-
-Use hooks to build your UI with authentication, CRUD, and real-time data.
-
-**[Get Started →](./react/getting-started)**
-
-</div>
-
-</div>

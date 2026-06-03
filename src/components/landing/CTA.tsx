@@ -101,7 +101,7 @@ export function CTA() {
               </Reveal>
               <Reveal delay={240}>
                 <div style={{display: 'flex', gap: 10, marginTop: 28, flexWrap: 'wrap'}}>
-                  <Button variant="primary" href="/docs/intro">
+                  <Button variant="primary" href="/intro">
                     Read the docs <Icon.arrow className="ag-arrow" />
                   </Button>
                   <Button href={GITHUB_URL} target="_blank" rel="noreferrer">
@@ -186,24 +186,24 @@ export function CTA() {
           <FooterCol
             title="Servers"
             items={[
-              {label: 'Laravel', href: '/docs/server/getting-started'},
-              {label: 'Rails', href: '/docs/rails/getting-started'},
-              {label: 'NestJS', href: '/docs/nestjs/getting-started'},
+              {label: 'Laravel', href: '/server/getting-started'},
+              {label: 'Rails', href: '/rails/getting-started'},
+              {label: 'NestJS', href: '/nestjs/getting-started'},
             ]}
           />
           <FooterCol
             title="Clients"
             items={[
-              {label: 'React', href: '/docs/react/getting-started'},
-              {label: 'React Native', href: '/docs/react-native/getting-started'},
+              {label: 'React', href: '/react/getting-started'},
+              {label: 'React Native', href: '/react-native/getting-started'},
             ]}
           />
           <FooterCol
             title="More"
             items={[
-              {label: 'Docs', href: '/docs/intro'},
+              {label: 'Docs', href: '/intro'},
               {label: 'GitHub', href: GITHUB_URL},
-              {label: 'Blueprint', href: '/docs/server/blueprint'},
+              {label: 'Blueprint', href: '/server/blueprint'},
             ]}
           />
         </footer>

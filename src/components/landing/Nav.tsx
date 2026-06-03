@@ -17,7 +17,7 @@ export function Nav() {
             <a href="#blueprint">Blueprint</a>
             <a href="#features">Features</a>
             <a href="#demo">Demo</a>
-            <a href="/docs/intro">Docs</a>
+            <a href="/intro">Docs</a>
           </div>
         </div>
         <div style={{display: 'flex', alignItems: 'center', gap: 10}}>
@@ -36,12 +36,12 @@ export function Nav() {
             <Icon.github />
             <span>GitHub</span>
           </a>
-          <a className="ag-btn" href="/docs/intro" style={{padding: '9px 14px', fontSize: 13}}>
+          <a className="ag-btn" href="/intro" style={{padding: '9px 14px', fontSize: 13}}>
             Docs
           </a>
           <a
             className="ag-btn ag-btn-primary"
-            href="/docs/server/getting-started"
+            href="/server/getting-started"
             style={{padding: '9px 14px', fontSize: 13}}>
             Get started
           </a>

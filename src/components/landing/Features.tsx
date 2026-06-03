@@ -155,7 +155,7 @@ export function Features() {
           <Reveal delay={160}>
             <div style={{display: 'flex', alignItems: 'center', gap: 14}}>
               <span style={{color: 'var(--ag-fg-muted)', fontSize: 14}}>+22 more</span>
-              <Button href="/docs/intro">
+              <Button href="/intro">
                 <span>All 28 features</span>
                 <Icon.arrow className="ag-arrow" />
               </Button>
