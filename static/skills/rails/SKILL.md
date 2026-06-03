@@ -27,7 +27,8 @@ Rhino auto-generates a complete REST API from your model definitions. Here is ev
 | 13 | **Eager Loading (Includes)** | `?include=user,comments` with nested support (`comments.user`). Count (`commentsCount`) and existence (`commentsExists`) suffixes. Authorization checked per include. |
 | 14 | **Multi-Tenancy** | Organization-based data isolation via `BelongsToOrganization` concern. Auto-sets `organization_id` via `RequestStore`, default scope filters queries. Route-prefix or subdomain resolution. |
 | 15 | **Nested Ownership Auto-Detection** | Models without direct `organization_id` are scoped by walking `belongs_to` chains (e.g., Comment → Post → Blog → Organization). |
-| 16 | **Route Groups** | Multiple URL prefixes with different middleware/auth per group, optionally constrained to a host via `domain:` (literal or `{organization}.example.com` for subdomain multitenancy). Reserved names: `:tenant` (org-scoped + invitations) and `:public` (no auth). |
+| 16 | **Route Groups** | Multiple URL prefixes with different middleware/auth per group, optionally constrained to a host via `domain:` (literal or `{organization}.example.com` for subdomain multitenancy). Reserved names: `:tenant` (org-scoped + invitations) and `:public` (no auth). Opt-in per-group `auth:` (group-tagged auth route set) and `hooks:` (lifecycle hooks). |
+| 16b | **Group Membership & Auth** (opt-in via `auth.enforce_group_membership`) | `user_roles.route_group` column (nil = wildcard) makes the group an access boundary: membership mismatch → 403, permissions resolve from the matched row. Per-group `auth: true` registers group-tagged auth routes; per-group `hooks:` class runs `after_login/logout/register/password_recover/password_reset` and may reject (revokes token). Invitations carry `route_group`. |
 | 17 | **Soft Deletes** | Via Discard gem (`discarded_at`). `DELETE` soft-deletes, plus `GET /trashed`, `POST /restore`, `DELETE /force-delete` endpoints. Each with its own permission. |
 | 18 | **Audit Trail** | `HasAuditTrail` concern logs all CRUD events with old/new values, user, IP, user-agent, and organization context via `RequestStore`. |
 | 19 | **Nested Operations** | `POST /nested` for atomic multi-model transactions. `$N.field` references between operations. All-or-nothing rollback. |
@@ -1086,6 +1087,56 @@ config.multi_tenant = { organization_identifier_column: 'slug' }
 ```
 
 Unknown subdomain or a non-member organization -> 404. `example.com` (no label) and `a.b.example.com` (multi-label) do not match `{organization}.example.com`. When `:tenant` has a domain, its invitation + nested routes inherit that domain.
+
+### Group Membership & Auth (opt-in)
+
+Three backward-compatible features make the group a real access boundary. All flags off = today's behavior, byte-for-byte.
+
+**1. Membership on `user_roles`.** A migration adds a nullable `route_group` column (and makes `organization_id` nullable for non-tenant groups). A `nil` `route_group` is a **wildcard** (member of every group — the back-compat default); a concrete value scopes the membership. Gated by the master flag:
+
+```ruby
+config.auth = { enforce_group_membership: false } # default OFF
+```
+
+- **Off:** no membership check; permission source is the org-presence heuristic.
+- **On:** after auth, the user must have a `user_roles` row matching the request's `route_group` (nil row = wildcard) **and**, for tenant groups, the resolved org — else **403**. Permissions then resolve from the matched row (exact-group row preferred over nil wildcard), not the heuristic. `:public` skips both.
+
+Membership is the coarse gate (may you enter); permissions are the fine check (what may you do). They run in sequence, never merged.
+
+**2. Group-aware auth.** `auth: true` registers the full auth set (`login`, `logout`, `password/recover`, `password/reset`, `register`) under the group's prefix/domain, tagged with its `route_group`. The legacy unprefixed `/api/auth/*` always remains for the default/no-group case. `:public` is never auth-enabled.
+
+```ruby
+config.route_group :driver, prefix: 'driver', auth: true, models: [:trips]
+# adds POST /api/driver/auth/login, …/logout, …/register, …/password/*
+```
+
+**3. Invitations carry the group.** Invite stores `route_group` (nil org for non-tenant groups); accept populates the membership then fires `after_register`. Cannot invite into `:public`. With enforcement on, the inviter must be a member of the target group.
+
+### Lifecycle Hooks (opt-in)
+
+A group's `hooks:` class responds to `after_login` / `after_logout` / `after_register` / `after_password_recover` / `after_password_reset` (subclass `Rhino::AuthHooks` for no-op defaults). Each runs **after** its action succeeds, receiving a context hash `{ user:, route_group:, organization:, token:, request: }`.
+
+```ruby
+config.route_group :driver, prefix: 'driver', auth: true, hooks: DriverAuthHooks, models: [:trips]
+```
+
+```ruby
+class DriverAuthHooks < Rhino::AuthHooks
+  def after_login(ctx)
+    unless ctx[:user].driver&.active?
+      raise Rhino::AuthRejected.new('Driver suspended.', status: 403) # revokes token, returns 403
+    end
+  end
+end
+```
+
+| Event | Fires after | Reject behavior |
+|-------|-------------|-----------------|
+| `after_login` / `after_register` | login / invite-accept register (token issued) | revokes the just-issued token, returns the status |
+| `after_logout` / `after_password_reset` | logout / reset completed | returns the status, no token side effects |
+| `after_password_recover` | recovery email requested | runs, but reject is **swallowed** (enumeration protection — uniform response) |
+
+Reject by raising `Rhino::AuthRejected.new(message, status: 403)`; default 403, may set 401/409/etc.
 
 ### Examples
 

@@ -17,6 +17,15 @@ Rhino.configure do |config|
 end
 ```
 
+| Keyword       | Type            | Default | Purpose                                                                              |
+|---------------|-----------------|---------|--------------------------------------------------------------------------------------|
+| `prefix:`     | String          | —       | URL prefix for the group's routes                                                    |
+| `domain:`     | String / nil    | `nil`   | Optional host constraint (see [Domain Constraints](#domain-constraints))             |
+| `middleware:` | Array           | `[]`    | Middleware stack applied on top of authentication                                    |
+| `models:`     | `:all` / Array  | —       | `:all` for all registered models, or an array of model slugs                         |
+| `auth:`       | Boolean         | `false` | Register a group-tagged auth route set (see [Group membership & auth](#group-membership--auth)) |
+| `hooks:`      | Class           | `nil`   | A class responding to the lifecycle event methods, run after each auth action        |
+
 ### Reserved Group Names
 
 Two group names have special behavior:
@@ -101,6 +110,127 @@ which compiles the pattern to an anchored, case-insensitive regex (`{name}`
 becomes `(?<name>[^.]+)`) and injects captured values into the request's path
 parameters so `ResolveOrganizationFromRoute` (and the controller) resolve the
 organization from the subdomain.
+
+## Group membership & auth
+
+By default a route group only chooses a URL/host context and a permission
+*source* — it is **not an access boundary**, and auth (`/api/auth/*`) is
+group-blind. Three opt-in, fully backward-compatible features turn the group
+into a first-class boundary. **With all flags off, behavior is byte-for-byte
+what it is today.**
+
+### Group membership on `user_roles`
+
+A migration adds a nullable `route_group` column to `user_roles` (and makes
+`organization_id` nullable, since non-tenant groups like `:admin`/`:driver` have
+no org). A membership row is now keyed by `(user, route_group, organization,
+role)`.
+
+| `route_group` value | Meaning                                                          |
+|---------------------|------------------------------------------------------------------|
+| `nil`               | **Wildcard** — member of *every* group (the back-compat default) |
+| `'driver'`          | Membership scoped to the `driver` group only                     |
+
+Enforcement is gated by the master flag in `config/initializers/rhino.rb`:
+
+```ruby title="config/initializers/rhino.rb"
+config.auth = { enforce_group_membership: false } # default OFF
+```
+
+- **Off (default):** no membership check; the permission source is the existing
+  org-presence heuristic (see [Permission Resolution](#permission-resolution)).
+- **On:** after authentication, the user must hold a `user_roles` row whose
+  `route_group` matches the request's group (a `nil` row is a wildcard match)
+  **and**, for tenant groups, the resolved organization. No match → **403**.
+  Permissions then resolve from **that matching membership row** (per
+  `[group, org]`), not the heuristic. When both an exact-group row and a
+  wildcard (`nil`) row exist, the **exact row is preferred**.
+
+Membership is the **coarse** gate (may you enter the group at all); permissions
+remain the **fine** check (what may you do). They run in sequence and are never
+merged. The `:public` group skips both (no auth).
+
+:::info No backfill required
+A `nil` `route_group` is a wildcard, so enabling enforcement never locks out
+existing rows. Scope rows to concrete groups only when you want to restrict them.
+:::
+
+### Group-aware auth
+
+Pass `auth: true` to a group to register the full auth route set — `login`,
+`logout`, `password/recover`, `password/reset`, `register` — under that group's
+prefix/domain, tagged with the group's `route_group` (exactly how CRUD routes
+are generated). The matched route makes the group unambiguous, so the controller
+knows which group is signing in.
+
+```ruby title="config/initializers/rhino.rb"
+# adds POST /api/driver/auth/login, …/logout, …/register, …/password/*
+config.route_group :driver, prefix: 'driver', auth: true, models: [:trips]
+```
+
+- The legacy unprefixed `/api/auth/*` set **always remains** and maps to the
+  `:default`/no-group case, preserving today's behavior for apps that don't opt in.
+- A group with `auth:` and a `domain:` gets `…/auth/login` on that host; with a
+  prefix it gets `{prefix}/auth/login`. Both carry the group's `route_group`.
+- The resolved `route_group` flows into membership checks and lifecycle hooks.
+- `:public` is never auth-enabled.
+
+### Lifecycle hooks
+
+A group may declare an optional `hooks:` class responding to
+`after_login` / `after_logout` / `after_register` / `after_password_recover` /
+`after_password_reset` (subclass `Rhino::AuthHooks` for no-op defaults). The
+relevant auth action calls it **after** it succeeds, passing a context hash
+(`{ user:, route_group:, organization:, token:, request: }`):
+
+```ruby title="app/auth/driver_auth_hooks.rb"
+class DriverAuthHooks < Rhino::AuthHooks
+  def after_login(ctx)
+    unless ctx[:user].driver&.active?
+      # Revokes the just-issued token and returns 403.
+      raise Rhino::AuthRejected.new('Driver account is suspended.', status: 403)
+    end
+  end
+end
+```
+
+```ruby title="config/initializers/rhino.rb"
+config.route_group :driver, prefix: 'driver', auth: true, hooks: DriverAuthHooks, models: [:trips]
+```
+
+| Event                    | Fires after                     | Can reject?                                        |
+|--------------------------|---------------------------------|----------------------------------------------------|
+| `after_login`            | successful login (token issued) | yes — revokes the token, returns the status        |
+| `after_register`         | invitation-accept registration  | yes — revokes the token, returns the status        |
+| `after_logout`           | logout                          | yes (token is already gone; returns the status)    |
+| `after_password_reset`   | password reset completed        | yes                                                |
+| `after_password_recover` | recovery email requested        | runs, but the rejection is **swallowed** (see note) |
+
+A hook rejects by raising `Rhino::AuthRejected.new(message, status: 403)`. For
+token-issuing actions (`login`, `register`) the controller **revokes the
+just-issued token** and returns the given status; for the others it returns the
+status with no side effects. The default status is 403; a hook may set 401/409/etc.
+
+:::warning `after_password_recover` rejections are swallowed
+The recover action still **runs** the hook (so side effects like auditing or
+throttling happen), but **swallows any rejection** — it always returns the same
+uniform "recovery email sent" response whether or not the email exists.
+Surfacing the hook's status would turn recover into an email-enumeration oracle.
+Reject semantics are preserved for `after_login`/`after_register`/`after_logout`/`after_password_reset`.
+:::
+
+### Invitations carry the group
+
+When a group is an access boundary, invitations record which group the invitee
+joins:
+
+- Invite creation stores a `route_group` (with `organization_id` only for tenant
+  groups — non-tenant group invites store a `nil` org).
+- Accept populates the `user_roles` membership with that `route_group` (+ org +
+  role), then fires the group's `after_register` hook.
+- You **cannot** invite into the `:public` group (it has no auth).
+- When enforcement is on, the inviter must themselves be a member of the target
+  group.
 
 ## Examples
 

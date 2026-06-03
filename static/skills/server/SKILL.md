@@ -25,7 +25,8 @@ Rhino auto-generates a complete REST API from your model definitions. Here is ev
 | 13 | **Eager Loading (Includes)** | `?include=user,comments` with nested support (`comments.user`). Count (`commentsCount`) and existence (`commentsExists`) suffixes. Authorization checked per include. |
 | 14 | **Multi-Tenancy** | Organization-based data isolation via `BelongsToOrganization` trait. Auto-sets `organization_id`, global scope filters queries. Route-prefix or subdomain resolution. |
 | 15 | **Nested Ownership Auto-Detection** | Models without direct `organization_id` are scoped by walking `BelongsTo` chains (e.g., Comment → Post → Blog → Organization). |
-| 16 | **Route Groups** | Multiple URL prefixes (and optional per-group `domain`/host constraints) with different middleware/auth per group. Reserved names: `tenant` (org-scoped + invitations) and `public` (no auth). |
+| 16 | **Route Groups** | Multiple URL prefixes (and optional per-group `domain`/host constraints) with different middleware/auth per group. Reserved names: `tenant` (org-scoped + invitations) and `public` (no auth). Opt-in per-group `auth` (group-tagged auth route set) and `hooks` (lifecycle hooks). |
+| 16b | **Group Membership & Auth** (opt-in via `auth.enforce_group_membership`) | `user_roles.route_group` column (NULL = wildcard) makes the group an access boundary: membership mismatch → 403, permissions resolve from the matched row. Per-group `auth: true` registers group-tagged auth routes; per-group `hooks` class runs `afterLogin/Logout/Register/PasswordRecover/PasswordReset` and may reject (revokes token). Invitations carry `route_group`. |
 | 17 | **Soft Deletes** | `DELETE` soft-deletes, plus `GET /trashed`, `POST /restore`, `DELETE /force-delete` endpoints. Each with its own permission. |
 | 18 | **Audit Trail** | `HasAuditTrail` trait logs all CRUD events with old/new values, user, IP, user-agent, and organization context. |
 | 19 | **Nested Operations** | `POST /nested` for atomic multi-model transactions. `$N.field` references between operations. All-or-nothing rollback. |
@@ -1205,6 +1206,8 @@ $user->hasPermission('posts.store', $otherOrg);   // false (viewer)
         'domain' => null, // optional host constraint (see Domain Constraints)
         'middleware' => [SomeMiddleware::class],
         'models' => '*', // or ['posts', 'comments']
+        'auth' => false, // opt-in: register group-tagged auth routes
+        'hooks' => null, // opt-in: AuthLifecycleHooks class
     ],
 ],
 ```
@@ -1218,6 +1221,62 @@ A group can be scoped to a host with the optional `'domain'` key (uses Laravel `
 - `'{organization}.example.com'` -- parameterized; the captured `{organization}` is a route parameter, so `ResolveOrganizationFromRoute` resolves the org from the subdomain (subdomain multitenancy, no extra wiring). Unknown/non-member subdomain -> 404. Matches a single host label only.
 
 `'domain'` and `'prefix'` combine. When the `'tenant'` group has a domain, its invitation and `/nested` routes inherit it.
+
+### Group Membership & Auth (opt-in)
+
+Three backward-compatible features make the group a real access boundary. All flags off = today's behavior, byte-for-byte.
+
+**1. Membership on `user_roles`.** A migration adds a nullable `route_group` column (and makes `organization_id` nullable for non-tenant groups). A `NULL` `route_group` is a **wildcard** (member of every group — the back-compat default); a concrete value scopes the membership. Gated by the master flag:
+
+```php
+// config/rhino.php
+'auth' => ['enforce_group_membership' => false], // default OFF
+```
+
+- **Off:** no membership check; permission source is the org-presence heuristic.
+- **On:** after auth, the user must have a `user_roles` row matching the request's `route_group` (NULL row = wildcard) **and**, for tenant groups, the resolved org — else **403**. Permissions then resolve from the matched row (exact-group row preferred over NULL wildcard), not the heuristic. `public` skips both.
+
+Membership is the coarse gate (may you enter); permissions are the fine check (what may you do). They run in sequence, never merged.
+
+**2. Group-aware auth.** `'auth' => true` registers the full auth set (`login`, `logout`, `password/recover`, `password/reset`, `register`) under the group's prefix/domain, tagged with its `route_group`. The legacy unprefixed `/api/auth/*` always remains for the default/no-group case. `public` is never auth-enabled.
+
+```php
+'driver' => ['prefix' => 'driver', 'auth' => true, 'models' => ['trips']],
+// adds POST /api/driver/auth/login, …/logout, …/register, …/password/*
+```
+
+**3. Invitations carry the group.** Invite stores `route_group` (NULL org for non-tenant groups); accept populates the membership then fires `afterRegister`. Cannot invite into `public`. With enforcement on, the inviter must be a member of the target group.
+
+### Lifecycle Hooks (opt-in)
+
+A group's `'hooks'` class implements `Rhino\Contracts\AuthLifecycleHooks` (abstract base, no-op defaults). Each method runs **after** its action succeeds, receiving `['user' => …, 'routeGroup' => …, 'organization' => …, 'token' => …, 'request' => …]`.
+
+```php
+'driver' => ['prefix' => 'driver', 'auth' => true, 'hooks' => \App\Auth\DriverAuthHooks::class, 'models' => ['trips']],
+```
+
+```php
+use Rhino\Contracts\AuthLifecycleHooks;
+use Rhino\Exceptions\RhinoAuthRejected;
+
+class DriverAuthHooks extends AuthLifecycleHooks
+{
+    public function afterLogin(array $ctx): void
+    {
+        if (! $ctx['user']->driver?->active) {
+            throw new RhinoAuthRejected(403, 'Driver suspended.'); // revokes token, returns 403
+        }
+    }
+}
+```
+
+| Event | Fires after | Reject behavior |
+|-------|-------------|-----------------|
+| `afterLogin` / `afterRegister` | login / invite-accept register (token issued) | revokes the just-issued token, returns the status |
+| `afterLogout` / `afterPasswordReset` | logout / reset completed | returns the status, no token side effects |
+| `afterPasswordRecover` | recovery email requested | runs, but reject is **swallowed** (enumeration protection — uniform response) |
+
+Reject by throwing `RhinoAuthRejected($status = 403, $message)`; default 403, may set 401/409/etc.
 
 ```php
 'route_groups' => [

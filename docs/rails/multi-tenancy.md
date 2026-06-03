@@ -228,6 +228,29 @@ user.has_permission?('posts.store', other_org)   # false
 user.has_permission?('posts.index', other_org)   # true
 ```
 
+## Group Membership Enforcement
+
+By default, belonging to an organization is what grants access; a route group is
+not itself an access boundary. You can opt into treating group membership as a
+first-class gate with the master flag in `config/initializers/rhino.rb`:
+
+```ruby title="config/initializers/rhino.rb"
+config.auth = { enforce_group_membership: false } # default OFF — behavior unchanged
+```
+
+When the flag is **on**, after authentication an additional **coarse** check
+runs before permissions: the user must hold a `user_roles` row whose
+`route_group` matches the request's group (a `nil` `route_group` row is a
+**wildcard** that matches every group) **and**, for tenant groups, the resolved
+organization. No matching row → **403**. Permissions then resolve from that
+matching membership row (per `[group, org]`), with an exact-group row preferred
+over a wildcard row — instead of the org-presence heuristic.
+
+This pairs with the per-group `auth:`/`hooks:` keywords and invitation
+`route_group` described in [Route Groups → Group membership & auth](./route-groups.md#group-membership--auth).
+With the flag off, none of this applies and multi-tenancy behaves exactly as
+documented above.
+
 ## Access Control
 
 ### User Not in Organization
