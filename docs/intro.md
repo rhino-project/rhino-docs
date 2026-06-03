@@ -22,7 +22,7 @@ Jump straight to the docs for your framework:
 
 Eloquent models, policies, validation, multi-tenancy.
 
-**[Get started →](./server/getting-started)**
+**[Get started →](./server/getting-started.md)**
 
 </div>
 
@@ -32,7 +32,7 @@ Eloquent models, policies, validation, multi-tenancy.
 
 ActiveRecord, Pundit policies, the same powerful features.
 
-**[Get started →](./rails/getting-started)**
+**[Get started →](./rails/getting-started.md)**
 
 </div>
 
@@ -42,7 +42,7 @@ ActiveRecord, Pundit policies, the same powerful features.
 
 TypeScript, Prisma, decorators, dependency injection.
 
-**[Get started →](./nestjs/getting-started)**
+**[Get started →](./nestjs/getting-started.md)**
 
 </div>
 
@@ -52,7 +52,7 @@ TypeScript, Prisma, decorators, dependency injection.
 
 Hooks for auth, CRUD, pagination, includes.
 
-**[Get started →](./react/getting-started)**
+**[Get started →](./react/getting-started.md)**
 
 </div>
 
@@ -73,7 +73,7 @@ Or keep reading for the architecture overview and a Hello World example.
 │  useAuth()              │         │  Validation, Policies    │
 └─────────────────────────┘         └──────────────────────────┘
     @rhino-dev/rhino-react              rhino-project/rhino-laravel (Laravel)
-                                  rhino (Ruby on Rails)
+                                  rhino-rails (Ruby on Rails)
                                   @rhino-dev/rhino-nestjs (NestJS)
 ```
 
