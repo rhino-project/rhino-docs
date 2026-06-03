@@ -58,6 +58,15 @@ Semantics:
 
 `domain:` and `prefix:` are independent and combine — a group may have both.
 
+:::warning Conflicting groups fail fast
+Two groups that share the same prefix **and** overlapping models **and** an
+intersecting host-set would silently shadow each other. Rhino validates the
+config when routes are drawn and raises `Rhino::RouteGroupConflictError` in that
+case. The fix is to give them distinct prefixes, distinguish them with different
+`domain:` values, or make their `models:` disjoint. A group without a `domain:`
+matches every host, so it intersects with all others.
+:::
+
 #### Subdomain multi-tenancy
 
 A **parameterized** domain captures a single host label and exposes it exactly
