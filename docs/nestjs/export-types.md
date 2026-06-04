@@ -5,19 +5,15 @@ title: Export Types
 
 # Export Types
 
-Rhino includes an Ace command that generates TypeScript interfaces from your registered models. It introspects model column definitions, builds an OpenAPI 3.0 spec internally, and runs `openapi-typescript` to produce a `.d.ts` file.
-
-## Requirements
-
-The command runs `npx openapi-typescript` under the hood, so Node.js must be available on the machine where you run the command (which it is, since you're running NestJS).
+Rhino includes a CLI command that generates TypeScript interfaces from your registered models. It introspects each registration's Prisma model and writes a `.d.ts` file of interfaces.
 
 ## Usage
 
 ```bash title="terminal"
-npx rhino rhino:export-types
+npx rhino export-types
 ```
 
-This starts the NestJS application, introspects all registered models from `src/rhino.config.ts`, reads their `$columnsDefinitions`, and writes TypeScript interfaces to the configured output paths.
+This introspects all registered models from `src/rhino.config.ts` and writes TypeScript interfaces to the configured output paths.
 
 ### Command Flags
 
@@ -28,32 +24,21 @@ This starts the NestJS application, introspects all registered models from `src/
 ### Examples
 
 ```bash title="terminal"
-# Write to configured paths (RHINO_CLIENT_PATH / RHINO_MOBILE_PATH)
-npx rhino rhino:export-types
+# Write to configured paths (clientPath / mobilePath)
+npx rhino export-types
 
-# Write to a specific file
-npx rhino rhino:export-types --output=tmp/rhino.d.ts
+# Write to a specific file (default: src/types/rhino.d.ts)
+npx rhino export-types --output=tmp/rhino.d.ts
 ```
 
 ## Configuration
 
-Set the output paths in your `.env` file:
-
-```env title=".env"
-RHINO_CLIENT_PATH=../client
-RHINO_MOBILE_PATH=../mobile
-```
-
-Or in `src/rhino.config.ts`:
+Set the output paths in `src/rhino.config.ts` via `clientPath` and `mobilePath`:
 
 ```ts title="src/rhino.config.ts"
-import { RhinoModule } from '@rhino-dev/rhino-nestjs';  // wire via RhinoModule.forRoot() in AppModule
-
-RhinoModule.forRoot({
-  clientPath: process.env.RHINO_CLIENT_PATH,
-  mobilePath: process.env.RHINO_MOBILE_PATH,
-  // ...
-})
+// Inside the RhinoConfig object passed to RhinoModule.forRoot()
+clientPath: process.env.RHINO_CLIENT_PATH, // e.g. '../client'
+mobilePath: process.env.RHINO_MOBILE_PATH, // e.g. '../mobile'
 ```
 
 When both paths are set, the command writes to both:
@@ -71,25 +56,25 @@ export interface Post {
   id?: number;
   title?: string;
   content?: string;
-  is_published?: boolean;
-  blog_id?: number;
-  created_at?: string;
-  updated_at?: string;
-  deleted_at?: string | null;
+  isPublished?: boolean;
+  blogId?: number;
+  createdAt?: string;
+  updatedAt?: string;
+  deletedAt?: string | null;
 }
 ```
 
 ### Type Mapping
 
-| Prisma Column Type | TypeScript Type |
+| Prisma Field Type | TypeScript Type |
 |------------------|----------------|
-| `integer`, `bigint`, `increments` | `number` |
-| `decimal`, `float`, `double` | `number` |
-| `boolean` | `boolean` |
-| `timestamp`, `datetime`, `date` | `string` |
-| `json`, `jsonb` | `Record<string, unknown>` |
-| `string`, `text`, `uuid` | `string` |
-| Nullable columns | adds `\| null` |
+| `Int`, `BigInt` | `number` |
+| `Decimal`, `Float` | `number` |
+| `Boolean` | `boolean` |
+| `DateTime` | `string` |
+| `Json` | `Record<string, unknown>` |
+| `String` | `string` |
+| Optional fields (`Type?`) | adds `\| null` |
 
 ## Using Generated Types
 
@@ -118,6 +103,6 @@ Rhino's policy system (`permittedAttributesForShow`, `hiddenAttributesForShow`) 
 ## Workflow
 
 1. Define your models and run migrations
-2. Run `npx rhino rhino:export-types`
+2. Run `npx rhino export-types`
 3. Import the generated types in your React/React Native code
 4. Re-run the command whenever you change your database schema

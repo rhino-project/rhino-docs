@@ -9,15 +9,15 @@ Generate fully working models, policies, tests, and seeders from YAML spec files
 
 ## Why Blueprint?
 
-The [Interactive Generator](./generator.md) scaffolds resources one at a time with commented-out permission methods. Blueprint takes a different approach:
+The [Interactive Generator](./generator.md) scaffolds individual stubs one at a time with commented-out permission methods. Blueprint takes a different approach:
 
 | | Interactive Generator | Blueprint |
 |---|---|---|
 | Input | CLI prompts | YAML spec files |
 | Policies | Methods **commented out** | Methods with **full working code** |
-| Tests | CRUD access only | CRUD + field visibility + forbidden fields |
-| Seeders | Basic role seeder | Aggregated permissions from all models |
-| Batch | One model at a time | All models at once |
+| Tests | — | CRUD + field visibility + forbidden fields |
+| Seeders | — | Sample rows per model |
+| Batch | One stub at a time | All models at once |
 | Repeatability | Manual | Hash-based skip for unchanged specs |
 
 Blueprint is ideal when you know your full permission matrix upfront — especially for multi-role, multi-tenant applications.
@@ -29,19 +29,20 @@ Blueprint is ideal when you know your full permission matrix upfront — especia
 The `.rhino/` directory is created automatically during installation:
 
 ```bash title="terminal"
-npx rhino rhino:install
+npx rhino install
 ```
 
 This creates:
 ```
 .rhino/
-  blueprints/       # Your YAML spec files go here
+  _roles.yaml       # Role definitions (shared across all blueprints)
+  blueprints/       # Your model YAML spec files go here
   BLUEPRINT.md      # AI guide for generating YAML specs
 ```
 
 ### 2. Define Roles
 
-```yaml title=".rhino/blueprints/_roles.yaml"
+```yaml title=".rhino/_roles.yaml"
 roles:
   owner:
     name: Owner
@@ -113,83 +114,69 @@ permissions:
 ### 4. Generate
 
 ```bash title="terminal"
-npx rhino rhino:blueprint
+npx rhino blueprint
 ```
 
 This generates **per model**:
-- `app/models/contract.ts` — Prisma model with HasRhino, HasValidation, column config
-- `database/migrations/xxxx_create_contracts_table.ts` — Knex migration
-- `app/models/scopes/contract_scope.ts` — auto-discovery scope
-- `app/policies/contract_policy.ts` — **fully working** permission methods
-- `tests/unit/contract.spec.ts` — CRUD, field visibility, and forbidden field tests
+- A Prisma model fragment appended to `prisma/schema.prisma`
+- `src/resources/{Model}Resource.ts` — the `ModelRegistration` object (with role-keyed Zod validation, query config, soft deletes, etc.)
+- `src/policies/{Model}Policy.ts` — **fully working** permission methods
+- `test/generated/{Model}.spec.ts` — Jest tests covering CRUD, field visibility, and forbidden fields
+- `src/seeders/{Model}Seeder.ts` — a seeder that inserts sample rows
 
-And **cross-model**:
-- `database/seeders/role_seeder.ts` — creates all roles
-- `database/seeders/user_role_seeder.ts` — sample users with aggregated permissions
+After generating, import each `*Resource` registration into `src/rhino.config.ts` and run `npx prisma migrate dev` to apply the schema changes.
 
 ## Command Options
 
 ```bash title="terminal"
 # Generate all models
-npx rhino rhino:blueprint
+npx rhino blueprint
 
-# Process a single model
-npx rhino rhino:blueprint --model=contracts
+# Process a single model by slug
+npx rhino blueprint --model=contracts
 
 # Preview without writing files
-npx rhino rhino:blueprint --dry-run
+npx rhino blueprint --dry-run
 
 # Force regeneration (ignore cached hashes)
-npx rhino rhino:blueprint --force
-
-# Skip specific artifacts
-npx rhino rhino:blueprint --skip-tests
-npx rhino rhino:blueprint --skip-seeders
-
-# Custom blueprint directory
-npx rhino rhino:blueprint --dir=.rhino/blueprints
+npx rhino blueprint --force
 ```
 
 ## Generated Policy Example
 
-From the spec above, `contract_policy.ts` contains **active, working code**:
+From the spec above, `ContractPolicy.ts` contains **active, working code**:
 
-```ts title="app/policies/contract_policy.ts"
-import { ResourcePolicy } from '@rhino-dev/rhino-nestjs/policies/resource_policy'
+```ts title="src/policies/ContractPolicy.ts"
+import { ResourcePolicy } from '@rhino-dev/rhino-nestjs';
 
-export default class ContractPolicy extends ResourcePolicy {
-  static resourceSlug = 'contracts'
+export class ContractPolicy extends ResourcePolicy {
+  override resourceSlug = 'contracts';
 
-  permittedAttributesForShow(user: any): string[] {
-    if (this.hasRole(user, 'owner') || this.hasRole(user, 'admin')) {
-      return ['*']
+  override permittedAttributesForShow(user: any, org?: any): string[] {
+    if (this.hasRole(user, 'owner', org) || this.hasRole(user, 'admin', org)) {
+      return ['*'];
     }
-
-    if (this.hasRole(user, 'viewer')) {
-      return ['id', 'title', 'status']
+    if (this.hasRole(user, 'viewer', org)) {
+      return ['id', 'title', 'status'];
     }
-
-    return []
+    return [];
   }
 
-  hiddenAttributesForShow(user: any): string[] {
-    if (this.hasRole(user, 'viewer')) {
-      return ['total_value']
+  override hiddenAttributesForShow(user: any, org?: any): string[] {
+    if (this.hasRole(user, 'viewer', org)) {
+      return ['total_value'];
     }
-
-    return []
+    return [];
   }
 
-  permittedAttributesForCreate(user: any): string[] {
-    if (this.hasRole(user, 'owner')) {
-      return ['*']
+  override permittedAttributesForCreate(user: any, org?: any): string[] {
+    if (this.hasRole(user, 'owner', org)) {
+      return ['*'];
     }
-
-    if (this.hasRole(user, 'admin')) {
-      return ['title', 'total_value', 'status']
+    if (this.hasRole(user, 'admin', org)) {
+      return ['title', 'total_value', 'status'];
     }
-
-    return []
+    return [];
   }
 
   // permittedAttributesForUpdate follows the same pattern...
@@ -200,28 +187,28 @@ export default class ContractPolicy extends ResourcePolicy {
 
 ## Generated Test Example
 
-Tests cover three dimensions of permission enforcement:
+Tests are generated as Jest specs in `test/generated/` and cover three dimensions of permission enforcement:
 
-```ts title="tests/unit/contract.spec.ts"
+```ts title="test/generated/Contract.spec.ts"
 // 1. CRUD Access — correct HTTP status codes
-test('allows admin to access allowed contracts endpoints', async ({ client }) => {
+it('allows admin to access allowed contracts endpoints', async () => {
   // index → 200, show → 200, store → 201
-})
+});
 
-test('blocks viewer from blocked contracts endpoints', async ({ client }) => {
+it('blocks viewer from blocked contracts endpoints', async () => {
   // store → 403, update → 403, destroy → 403
-})
+});
 
 // 2. Field Visibility — correct fields in responses
-test('shows only permitted fields for viewer on contracts', async ({ client, assert }) => {
-  // assert.property(data, 'title')
-  // assert.notProperty(data, 'total_value')
-})
+it('shows only permitted fields for viewer on contracts', async () => {
+  // expect(data).toHaveProperty('title')
+  // expect(data).not.toHaveProperty('total_value')
+});
 
 // 3. Forbidden Fields — rejects writes with restricted fields
-test('returns 403 when viewer tries to set restricted fields on contracts', async ({ client }) => {
+it('returns 403 when viewer tries to set restricted fields on contracts', async () => {
   // POST with 'total_value' → 403
-})
+});
 ```
 
 ## YAML Spec Reference
@@ -234,9 +221,9 @@ slug: model_names         # snake_case plural (auto-derived)
 table: model_names        # table name (defaults to slug)
 
 options:
-  belongs_to_organization: false  # multi-tenant scoping
-  soft_deletes: true              # SoftDeletes mixin
-  audit_trail: false              # HasAuditTrail mixin
+  belongs_to_organization: false  # sets belongsToOrganization on the registration
+  soft_deletes: true              # sets softDeletes on the registration
+  audit_trail: false              # sets hasAuditTrail on the registration
   owner: null                     # parent model for child resources
   except_actions: []              # block actions for ALL roles
   pagination: false               # enable pagination
@@ -272,21 +259,21 @@ permissions:
 
 ### Column Types
 
-| Type | Migration | VineJS |
-|------|-----------|--------|
-| `string` | `table.string()` | `vine.string().maxLength(255)` |
-| `text` | `table.text()` | `vine.string()` |
-| `integer` | `table.integer()` | `vine.number()` |
-| `bigInteger` | `table.bigInteger()` | `vine.number()` |
-| `boolean` | `table.boolean()` | `vine.boolean()` |
-| `date` | `table.date()` | `vine.string()` |
-| `datetime` | `table.datetime()` | `vine.string()` |
-| `timestamp` | `table.timestamp()` | `vine.string()` |
-| `decimal` | `table.decimal(p, s)` | `vine.number()` |
-| `float` | `table.float()` | `vine.number()` |
-| `json` | `table.json()` | `vine.object({})` |
-| `uuid` | `table.uuid()` | `vine.string().uuid()` |
-| `foreignId` | `table.integer().unsigned().references('id')` | `vine.number()` |
+| Type | Prisma | Zod |
+|------|--------|-----|
+| `string` | `String` | `z.string().max(255)` |
+| `text` | `String` | `z.string()` |
+| `integer` | `Int` | `z.number().int()` |
+| `bigInteger` | `BigInt` | `z.bigint()` |
+| `boolean` | `Boolean` | `z.boolean()` |
+| `date` | `DateTime` | `z.string().datetime().or(z.date())` |
+| `datetime` | `DateTime` | `z.string().datetime().or(z.date())` |
+| `timestamp` | `DateTime` | `z.string().datetime().or(z.date())` |
+| `decimal` | `Decimal` (`Float` on SQLite) | `z.number()` |
+| `float` | `Float` | `z.number()` |
+| `json` | `Json` | `z.record(z.any())` |
+| `uuid` | `String` | `z.string().uuid()` |
+| `foreignId` | `Int` + `@relation` | `z.number().int()` |
 
 ### Permission Surfaces
 
@@ -339,7 +326,7 @@ Blueprint tracks file hashes in `.rhino/blueprints/.blueprint-manifest.json`:
 
 ## AI-Assisted Blueprint Creation
 
-The `.rhino/BLUEPRINT.md` file (created during `npx rhino rhino:install`) is a comprehensive guide that teaches AI assistants how to generate blueprint YAML files.
+The `.rhino/BLUEPRINT.md` file (created during `npx rhino install`) is a comprehensive guide that teaches AI assistants how to generate blueprint YAML files.
 
 Point your AI assistant to this file:
 
@@ -347,25 +334,38 @@ Point your AI assistant to this file:
 
 The guide includes the complete format spec, examples, and questions the AI should ask.
 
-## Aggregated Seeders
+## Seeders
 
-Permissions from all blueprint files are aggregated into a single `UserRoleSeeder`:
+Each blueprint generates a per-model seeder under `src/seeders/{Model}Seeder.ts` that upserts a few sample rows via the Prisma client:
 
-```ts title="database/seeders/user_role_seeder.ts"
-// Generated from: contracts.yaml, alerts.yaml, ...
-await UserRole.firstOrCreate(
-  { userId: adminUser.id, organizationId: org.id, roleId: adminRole.id },
-  {
-    permissions: [
-      'contracts.*',
-      'alerts.index', 'alerts.show', 'alerts.update',
-      // ... permissions from every blueprint
-    ]
-  }
-)
+```ts title="src/seeders/ContractSeeder.ts"
+import { PrismaClient } from '@prisma/client';
+
+const prisma = new PrismaClient();
+
+export async function seed(): Promise<void> {
+  await prisma.contract.upsert({
+    where: { id: 1 },
+    update: {},
+    create: {
+      id: 1,
+      organizationId: 1,
+      title: 'Sample Title 1',
+      status: 'draft',
+      // ...
+    },
+  });
+  // ...
+}
+
+if (require.main === module) {
+  seed()
+    .catch(console.error)
+    .finally(() => prisma.$disconnect());
+}
 ```
 
-When a role has wildcard access to **all** models, it simplifies to `['*']`.
+Run a seeder directly with `npx ts-node src/seeders/ContractSeeder.ts`, or wire them into your `prisma/seed.ts`.
 
 ## Cross-Framework Compatibility
 
@@ -373,9 +373,9 @@ The YAML spec format is **shared across all Rhino frameworks** (Laravel, NestJS,
 
 | Concern | Laravel | NestJS |
 |---------|---------|----------|
-| CLI | `php artisan rhino:blueprint` | `npx rhino rhino:blueprint` |
-| Models | Eloquent + traits | Prisma + compose() mixins |
-| Validation | Laravel rules | VineJS schemas |
-| Tests | Pest / PHPUnit | Japa |
-| Migrations | Laravel migrations | Knex migrations |
+| CLI | `php artisan rhino:blueprint` | `npx rhino blueprint` |
+| Models | Eloquent + traits | Prisma schema + `ModelRegistration` |
+| Validation | Laravel rules | Zod schemas |
+| Tests | Pest / PHPUnit | Jest |
+| Migrations | Laravel migrations | Prisma migrations |
 | Config | `config/rhino.php` | `src/rhino.config.ts` |

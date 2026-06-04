@@ -108,14 +108,14 @@ This guarantees atomicity: either all operations succeed, or none of them do.
 
 The `action` field explicitly determines whether a create or update is performed:
 
-- `action: 'create'` -- creates a new record using the model's `create()` method
-- `action: 'update'` -- loads the existing record by `id`, merges the data, and saves
+- `action: 'create'` -- creates a new record via the Prisma delegate's `create`
+- `action: 'update'` -- loads the existing record by `id`, merges the data, and updates it via `update`
 
 For update operations, the `id` field is **required**. A `422` error is returned if `id` is missing on an update operation.
 
 ## Validation
 
-Each operation is individually validated. The controller resolves permitted fields from the policy (`permittedAttributesForCreate` or `permittedAttributesForUpdate`) and then runs VineJS format validation via `validateForAction()`:
+Each operation is individually validated. The controller resolves permitted fields from the policy (`permittedAttributesForCreate` or `permittedAttributesForUpdate`) and then runs Zod format validation against the model's registered schema:
 
 - Forbidden fields (not in the permitted list) return **403 Forbidden**
 - Format validation failures return **422 Unprocessable Entity**
@@ -154,15 +154,12 @@ When multi-tenancy is enabled:
 Configure nested operations in `src/rhino.config.ts`:
 
 ```ts title="src/rhino.config.ts"
-import { RhinoModule } from '@rhino-dev/rhino-nestjs';  // wire via RhinoModule.forRoot() in AppModule
-
-RhinoModule.forRoot({
-  nested: {
-    path: 'nested',         // Route path (default: 'nested')
-    maxOperations: 50,      // Maximum operations per request (default: 50)
-    allowedModels: null,    // null = all registered models
-  },
-})
+// Inside the RhinoConfig object passed to RhinoModule.forRoot()
+nested: {
+  path: 'nested',         // Route path (default: 'nested')
+  maxOperations: 50,      // Maximum operations per request (default: 50)
+  allowedModels: null,    // null = all registered models
+},
 ```
 
 ### Config Options

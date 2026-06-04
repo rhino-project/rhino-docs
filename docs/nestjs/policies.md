@@ -11,11 +11,11 @@ Rhino uses a policy-based authorization system that automatically checks permiss
 
 The `ResourcePolicy` class provides default implementations for all CRUD authorization methods. Each method checks whether the authenticated user holds the required permission string:
 
-```ts title="app/policies/post_policy.ts"
-import { ResourcePolicy } from '@rhino-dev/rhino-nestjs/policies/resource_policy'
+```ts title="src/policies/PostPolicy.ts"
+import { ResourcePolicy } from '@rhino-dev/rhino-nestjs';
 
-export default class PostPolicy extends ResourcePolicy {
-  static resourceSlug = 'posts'
+export class PostPolicy extends ResourcePolicy {
+  override resourceSlug = 'posts';
 }
 ```
 
@@ -23,31 +23,31 @@ With this minimal setup, Rhino automatically checks these permissions:
 
 | Action | Policy Method | Permission Checked |
 |--------|--------------|-------------------|
-| Index (list) | `viewAny(user)` | `posts.index` |
-| Show (single) | `view(user, record)` | `posts.show` |
-| Store (create) | `create(user)` | `posts.store` |
-| Update | `update(user, record)` | `posts.update` |
-| Destroy (delete) | `delete(user, record)` | `posts.destroy` |
-| Trashed (list deleted) | `viewTrashed(user)` | `posts.trashed` |
-| Restore | `restore(user, record)` | `posts.restore` |
-| Force Delete | `forceDelete(user, record)` | `posts.forceDelete` |
+| Index (list) | `viewAny(user, org?)` | `posts.index` |
+| Show (single) | `view(user, record, org?)` | `posts.show` |
+| Store (create) | `create(user, org?)` | `posts.store` |
+| Update | `update(user, record, org?)` | `posts.update` |
+| Destroy (delete) | `delete(user, record, org?)` | `posts.destroy` |
+| Trashed (list deleted) | `viewTrashed(user, org?)` | `posts.trashed` |
+| Restore | `restore(user, record, org?)` | `posts.restore` |
+| Force Delete | `forceDelete(user, record, org?)` | `posts.forceDelete` |
 
 ## Permission Format
 
-Permissions follow the pattern `{resource_slug}.{action}`:
+Permissions follow the pattern `{resourceSlug}.{action}`:
 
 - `posts.index` -- can list posts
 - `posts.store` -- can create posts
 - `blogs.update` -- can update blogs
 - `comments.destroy` -- can delete comments
 
-The `resource_slug` matches the key you use in `src/rhino.config.ts` when registering models:
+The `resourceSlug` matches the key you use in `src/rhino.config.ts` when registering models:
 
 ```ts title="src/rhino.config.ts"
 models: {
-  posts: () => import('#models/post'),       // slug = 'posts'
-  'blog-posts': () => import('#models/blog_post'),  // slug = 'blog-posts'
-}
+  posts:        { model: 'post' },        // slug = 'posts'
+  'blog-posts': { model: 'blogPost' },    // slug = 'blog-posts'
+},
 ```
 
 ### Wildcard Support
@@ -58,52 +58,25 @@ Permissions support two levels of wildcards:
 - `posts.*` -- grants access to **all actions** on the `posts` resource
 
 ```ts
+import { userHasPermission } from '@rhino-dev/rhino-nestjs';
+
 // Full admin access
-const isAdmin = await user.hasPermission('*', organization)
+const isAdmin = userHasPermission(user, '*', organization);
 
 // All post actions
-const hasAllPostPerms = await user.hasPermission('posts.*', organization)
+const hasAllPostPerms = userHasPermission(user, 'posts.*', organization);
 
 // Specific action
-const canCreate = await user.hasPermission('posts.store', organization)
+const canCreate = userHasPermission(user, 'posts.store', organization);
 ```
 
-## HasPermissions Mixin
+## How Permissions Are Stored
 
-The `HasPermissions` mixin is applied to your **User** model and provides the `hasPermission()` and `getRoleSlugForValidation()` methods:
+Rhino supports two permission sources, used depending on whether the request is organization-scoped or not.
 
-```ts title="app/models/user.ts"
-import { compose } from '@nestjs/core/helpers'
-import { BaseModel, column, hasMany } from '@nestjs/lucid/orm'
-import type { HasMany } from '@nestjs/lucid/types/relations'
-import { HasPermissions } from '@rhino-dev/rhino-nestjs/mixins/has_permissions'
-import UserRole from '#models/user_role'
+### User-level permissions (`users.permissions`)
 
-export default class User extends compose(BaseModel, HasPermissions) {
-  @column({ isPrimary: true })
-  declare id: number
-
-  @column()
-  declare name: string
-
-  @column()
-  declare email: string
-
-  @column()
-  declare permissions: string[] | null
-
-  @hasMany(() => UserRole)
-  declare userRoles: HasMany<typeof UserRole>
-}
-```
-
-### How Permissions Are Stored
-
-Rhino supports two permission sources, used depending on whether the request is organization-scoped or not:
-
-#### User-level permissions (`users.permissions`)
-
-For non-tenant route groups (e.g., `driver`, `admin`, `default`), permissions are stored directly on the `users` table as a JSON column:
+For non-tenant route groups (e.g., `driver`, `admin`, default), permissions are stored directly on the `users` table as a JSON column:
 
 ```
 id | name         | email              | permissions (JSON)
@@ -114,9 +87,9 @@ id | name         | email              | permissions (JSON)
 
 This is the standard permission model and works for all apps, including non-multi-tenant apps.
 
-#### Organization-scoped permissions (`userRoles.permissions`)
+### Organization-scoped permissions (`user_roles.permissions`)
 
-For the `tenant` route group, permissions are stored on the `userRoles` join table, scoped per organization:
+For the `tenant` route group, permissions are stored on the `user_roles` join table, scoped per organization:
 
 ```
 id | userId | organizationId | permissions (JSON)
@@ -127,151 +100,147 @@ id | userId | organizationId | permissions (JSON)
 
 This enables multi-tenant permission models where the same user can hold different permissions in different organizations.
 
-#### Resolution
+### Resolution
 
-When `hasPermission(permission, organization?)` is called:
+When a permission is checked:
 
-1. **Organization present** (tenant route group) → checks `userRoles.permissions` for that organization
+1. **Organization present** (tenant route group) → checks `user_roles.permissions` for that organization
 2. **No organization** (any other route group) → checks `users.permissions` directly
 
 This is deterministic — the decision is based on the presence of an organization in the request, which is set by middleware in tenant route groups. There is no fallback chain.
 
-The `permissions` property can be either a JSON string or a plain array of permission strings:
+The `permissions` value can be either a JSON string or a plain array of permission strings:
 
 ```json
 ["posts.index", "posts.show", "posts.store", "comments.*"]
 ```
 
-### Methods
+### Permission Utilities
 
-| Method | Description |
+Rhino exports helpers for working with permissions outside the automatic guard path:
+
+| Utility | Description |
 |---|---|
-| `hasPermission(permission, organization?)` | Returns `true` if the user has the given permission. With organization: checks `userRoles.permissions`. Without: checks `users.permissions`. |
-| `getRoleSlugForValidation(organization?)` | Returns the user's role slug within an organization, used for role-based validation rules. |
+| `userHasPermission(user, permission, organization?)` | Returns `true` if the user holds the permission. With an organization, checks `user_roles.permissions`; without, checks `users.permissions`. |
+| `resolveUserRoleSlug(user, organizationId)` | Returns the user's role slug within an organization, used for role-based validation rules. |
 
 ## Custom Policies
 
 Extend `ResourcePolicy` to add custom authorization logic. Override any method to implement your own checks:
 
-```ts title="app/policies/post_policy.ts"
-import { ResourcePolicy } from '@rhino-dev/rhino-nestjs/policies/resource_policy'
+```ts title="src/policies/PostPolicy.ts"
+import { ResourcePolicy, userHasPermission } from '@rhino-dev/rhino-nestjs';
 
-export default class PostPolicy extends ResourcePolicy {
-  static resourceSlug = 'posts'
+export class PostPolicy extends ResourcePolicy {
+  override resourceSlug = 'posts';
 
   // Only allow the author to update their own posts
-  async update(user: any, record: any): Promise<boolean> {
-    if (record.userId === user.id) {
-      return true
+  override update(user: any, record: any, org?: any): boolean {
+    if (record.userId === user?.id) {
+      return true;
     }
-    return super.update(user, record)
+    return super.update(user, record, org);
   }
 
   // Restrict deletion to admins only
-  async delete(user: any, record: any): Promise<boolean> {
-    const isAdmin = await user.hasPermission('*')
-    if (isAdmin) {
-      return true
-    }
-    return false
+  override delete(user: any, _record: any, _org?: any): boolean {
+    return userHasPermission(user, '*');
   }
 
   // Custom logic for viewing trashed records
-  async viewTrashed(user: any): Promise<boolean> {
-    return this.checkPermission(user, 'trashed')
+  override viewTrashed(user: any, org?: any): boolean {
+    return this.checkPermission(user, 'trashed', org);
   }
 }
 ```
 
-You can call `super.methodName()` to compose your custom logic with the default permission check, or call `this.checkPermission(user, action)` directly to perform a permission lookup.
+You can call `super.methodName()` to compose your custom logic with the default permission check, or call `this.checkPermission(user, action, org)` directly to perform a permission lookup.
 
 ### Registering a Policy
 
-Register your policy on the model via the static `policy` property:
+Register the policy on the model registration via the `policy` field — a `ResourcePolicy` subclass reference:
 
-```ts title="app/models/post.ts"
-export default class Post extends compose(BaseModel, HasRhino) {
-  static policy = () => import('#policies/post_policy')
+```ts title="src/rhino.config.ts"
+import { PostPolicy } from './policies/PostPolicy';
 
-  // ... model definition
-}
+models: {
+  posts: {
+    model: 'post',
+    policy: PostPolicy,
+  },
+},
 ```
-
-The `policy` property can be:
-- An async import function (recommended): `() => import('#policies/post_policy')`
-- A policy class reference: `PostPolicy`
-- A policy instance: `new PostPolicy()`
 
 ## Attribute Permissions
 
-Policies control which attributes are visible and writable on a per-user basis through four methods:
+Policies control which attributes are visible and writable on a per-user basis through four methods. Each receives the user and an optional organization.
 
-### `hiddenAttributesForShow(user)`
+### `hiddenAttributesForShow(user, org?)`
 
-Returns an array of attribute names that should be **hidden** from API responses for this user. These are merged with the base hidden columns (`password`, `rememberToken`, etc.) and any `additionalHiddenColumns` on the model.
+Returns an array of attribute names that should be **hidden** from API responses for this user. These are merged with the base hidden columns (`password`, `rememberToken`, etc.) and any `additionalHiddenColumns` on the registration.
 
-```ts title="app/policies/user_policy.ts"
-import { ResourcePolicy } from '@rhino-dev/rhino-nestjs/policies/resource_policy'
+```ts title="src/policies/UserPolicy.ts"
+import { ResourcePolicy } from '@rhino-dev/rhino-nestjs';
 
-export default class UserPolicy extends ResourcePolicy {
-  static resourceSlug = 'users'
+export class UserPolicy extends ResourcePolicy {
+  override resourceSlug = 'users';
 
-  hiddenAttributesForShow(user: any | null): string[] {
+  override hiddenAttributesForShow(user: any, org?: any): string[] {
     if (!user) {
-      return ['email', 'phone', 'api_token']
+      return ['email', 'phone', 'apiToken'];
     }
-    if (this.hasRole(user, 'admin')) {
-      return []
+    if (this.hasRole(user, 'admin', org)) {
+      return [];
     }
-    return ['api_token']
+    return ['apiToken'];
   }
 }
 ```
 
-### `permittedAttributesForShow(user)`
+### `permittedAttributesForShow(user, org?)`
 
 Returns an array of attribute names the user is allowed to **see** in API responses. Acts as a whitelist — only listed attributes are returned. Return `['*']` (default) to allow all attributes.
 
 ```ts
-permittedAttributesForShow(user: any | null): string[] {
-  if (!user) return ['title', 'body']
-  if (this.hasRole(user, 'admin')) return ['*']
-  return ['title', 'body', 'status']
+override permittedAttributesForShow(user: any, org?: any): string[] {
+  if (!user) return ['title', 'body'];
+  if (this.hasRole(user, 'admin', org)) return ['*'];
+  return ['title', 'body', 'status'];
 }
 ```
 
-### `permittedAttributesForCreate(user)`
+### `permittedAttributesForCreate(user, org?)`
 
-Returns an array of attribute names the user is allowed to **send** when creating a record. Fields not in this list will trigger a **403 Forbidden** response. Return `['*']` (default) to allow all attributes.
+Returns an array of attribute names the user is allowed to **send** when creating a record. Fields not in this list trigger a **403 Forbidden** response. Return `['*']` (default) to allow all attributes.
 
 ```ts
-permittedAttributesForCreate(user: any | null): string[] {
-  if (!user) return []
-  if (this.hasRole(user, 'admin')) return ['*']
-  return ['title', 'body']
+override permittedAttributesForCreate(user: any, org?: any): string[] {
+  if (!user) return [];
+  if (this.hasRole(user, 'admin', org)) return ['*'];
+  return ['title', 'body'];
 }
 ```
 
-### `permittedAttributesForUpdate(user)`
+### `permittedAttributesForUpdate(user, org?)`
 
-Returns an array of attribute names the user is allowed to **send** when updating a record. Fields not in this list will trigger a **403 Forbidden** response. Return `['*']` (default) to allow all attributes.
+Returns an array of attribute names the user is allowed to **send** when updating a record. Fields not in this list trigger a **403 Forbidden** response. Return `['*']` (default) to allow all attributes.
 
 ```ts
-permittedAttributesForUpdate(user: any | null): string[] {
-  if (!user) return []
-  if (this.hasRole(user, 'admin')) return ['*']
-  return ['title', 'body']
+override permittedAttributesForUpdate(user: any, org?: any): string[] {
+  if (!user) return [];
+  if (this.hasRole(user, 'admin', org)) return ['*'];
+  return ['title', 'body'];
 }
 ```
 
-### `hasRole(user, roleSlug)`
+### `hasRole(user, roleSlug, org?)`
 
-A helper method available in all policies for checking the user's role:
+A helper method available in all policies for checking the user's role within an organization:
 
 ```ts
-permittedAttributesForCreate(user: any | null): string[] {
-  if (!user) return []
-  return this.hasRole(user, 'admin') ? ['*'] : ['title', 'content']
+override permittedAttributesForCreate(user: any, org?: any): string[] {
+  if (!user) return [];
+  return this.hasRole(user, 'admin', org) ? ['*'] : ['title', 'content'];
 }
 ```
 
@@ -281,21 +250,21 @@ When `permittedAttributesForShow` returns a non-wildcard list and `hiddenAttribu
 
 ## No Policy Behavior
 
-If a model does not define a `policy` property, **all actions are allowed**. This is useful during development or for public resources. Once you are ready to add authorization, create a policy and register it on the model.
+If a model registration does not define a `policy`, **all actions are allowed**. This is useful during development or for public resources. Once you are ready to add authorization, create a policy and set it on the registration.
 
 ## Slug Resolution
 
-The `resourceSlug` static property on the policy tells Rhino which permission prefix to use. If you do not set it, Rhino attempts to resolve the slug automatically by matching the model class against the `models` map in `src/rhino.config.ts`.
+The `resourceSlug` property on the policy tells Rhino which permission prefix to use. If you do not set it, the guard injects it from the model registry at runtime by matching the policy against the `models` map in `src/rhino.config.ts`.
 
-```ts title="app/policies/post_policy.ts"
+```ts title="src/policies/PostPolicy.ts"
 // Explicit slug (recommended)
-export default class PostPolicy extends ResourcePolicy {
-  static resourceSlug = 'posts'
+export class PostPolicy extends ResourcePolicy {
+  override resourceSlug = 'posts';
 }
 
 // Auto-resolved from config (works, but explicit is clearer)
-export default class PostPolicy extends ResourcePolicy {
-  // Rhino resolves 'posts' from src/rhino.config.ts models map
+export class PostPolicy extends ResourcePolicy {
+  // Rhino injects 'posts' from src/rhino.config.ts at runtime
 }
 ```
 

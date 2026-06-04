@@ -9,60 +9,72 @@ Install Rhino for NestJS and go from zero to a full REST API in under 5 minutes.
 
 ## Requirements
 
-- Node.js 20+
+- Node.js 18+
 - NestJS v10+ application
+- Prisma (`@prisma/client`)
 - npm or yarn
 
 ## Installation
 
 ```bash title="terminal"
-npm install @rhino-dev/rhino-nestjs@^4.0
+npm install @rhino-dev/rhino-nestjs
 ```
 
-Then run the NestJS configure command:
+Then run the interactive installer:
 
 ```bash title="terminal"
 npx rhino install
 ```
 
-The configure command will:
+The installer will:
 
-- Publish the `src/rhino.config.ts` configuration file
-- Register the Rhino service provider
-- Set up route bindings and middleware
+- Publish the `src/rhino.config.ts` configuration helper
+- Wire `RhinoModule` into your `AppModule`
+- Connect your Prisma client
 - Optionally enable multi-tenant support (organizations, roles)
 - Optionally enable audit trail (change logging)
+- Optionally set up the Claude Code skills
 
 ## Configuration
 
 Register `RhinoModule` in your application's root module. The typical setup keeps the config in a helper (`buildRhinoConfig`) and wires it into `AppModule`:
 
 ```ts title="src/rhino.config.ts"
-import type { PrismaClient } from '@prisma/client';
-import type { RhinoModuleOptions } from '@rhino-dev/rhino-nestjs';
+import { PrismaClient } from '@prisma/client';
+import type { RhinoConfig } from '@rhino-dev/rhino-nestjs';
 
-export function buildRhinoConfig(prisma: PrismaClient): RhinoModuleOptions {
+export function buildRhinoConfig(prisma: PrismaClient): RhinoConfig {
   return {
-    prismaClient: prisma,
+    // The consuming app's PrismaClient instance
+    prismaClient: prisma as any,
 
-    // Model registration -- slug => { model: 'prismaDelegate' }
+    // Model registration -- slug => ModelRegistration ({ model: 'prismaDelegate', ... })
     models: {
       posts:    { model: 'post' },
       comments: { model: 'comment' },
     },
 
-    // Route groups -- controls URL prefixes, middleware, and model access
+    // Route groups -- control URL prefixes, middleware, and model access
     routeGroups: {
-      default: {
-        prefix: '',          // Routes at /api/{slug}
-        middleware: [],
-        models: '*',         // All registered models
+      tenant: {
+        prefix: ':organization', // Routes at /api/:organization/{slug}
+        models: '*',             // All registered models
       },
     },
 
     // Multi-tenancy settings
     multiTenant: {
-      organizationIdentifierColumn: 'id',   // 'id', 'slug', or 'uuid'
+      enabled: true,
+      organizationIdentifierColumn: 'slug', // 'id', 'slug', or 'uuid'
+      organizationModel: 'organization',
+      userOrganizationModel: 'userRole',
+    },
+
+    // Authentication
+    auth: {
+      jwtSecret: process.env.JWT_SECRET ?? 'change-me-in-production',
+      jwtExpiresIn: '7d',
+      userModel: 'user',
     },
 
     // Invitation system
@@ -76,12 +88,6 @@ export function buildRhinoConfig(prisma: PrismaClient): RhinoModuleOptions {
       path: 'nested',         // Route path
       maxOperations: 50,      // Max ops per request
       allowedModels: null,    // null = all registered models
-    },
-
-    // Postman export
-    postman: {
-      baseUrl: '{{baseUrl}}/api',
-      collectionName: 'Rhino API',
     },
   };
 }
@@ -118,98 +124,82 @@ export class AppModule {}
 
 `RhinoModule.forRoot()` merges your values with sensible defaults, so you only need to specify properties you want to override. Use `RhinoModule.forRootAsync()` if the config has to be resolved via DI.
 
+## Bootstrap
+
+Call `applyRhinoRouting()` in `main.ts` after creating the Nest application. This registers the generated routes under the `/api` prefix:
+
+```ts title="src/main.ts"
+import { NestFactory } from '@nestjs/core';
+import { applyRhinoRouting } from '@rhino-dev/rhino-nestjs';
+import { AppModule } from './app.module';
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+  applyRhinoRouting(app, { prefix: 'api' });
+  await app.listen(3000);
+}
+bootstrap();
+```
+
 ## Environment Variables
 
 Add these to your `.env` file as needed:
 
 ```env title=".env"
-# Invitation expiration (days)
-INVITATION_EXPIRES_DAYS=7
+DATABASE_URL="postgresql://user:pass@localhost:5432/app"
+JWT_SECRET="change-me-in-production"
 ```
 
 ## Register Your First Model
 
-Create a Prisma model extending `RhinoModel`:
+Rhino models are plain **Prisma** models. Define them in `prisma/schema.prisma` — there is no base class to extend and no decorators to add:
 
-```ts title="app/models/post.ts"
-import { DateTime } from 'luxon'
-import { column, belongsTo, hasMany } from '@nestjs/lucid/orm'
-import type { BelongsTo, HasMany } from '@nestjs/lucid/types/relations'
-import vine from '@vinejs/vine'
-import RhinoModel from '@rhino-dev/rhino-nestjs/models/rhino_model'
-import User from '#models/user'
-import Comment from '#models/comment'
+```prisma title="prisma/schema.prisma"
+model Post {
+  id             Int       @id @default(autoincrement())
+  title          String
+  content        String?
+  status         String    @default("draft")
+  userId         Int
+  organizationId Int?
+  deletedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
-export default class Post extends RhinoModel {
-  @column({ isPrimary: true })
-  declare id: number
+  author       User          @relation(fields: [userId], references: [id])
+  comments     Comment[]
+  organization Organization? @relation(fields: [organizationId], references: [id])
 
-  @column()
-  declare title: string
-
-  @column()
-  declare content: string
-
-  @column()
-  declare status: string
-
-  @column()
-  declare userId: number
-
-  @column.dateTime({ autoCreate: true })
-  declare createdAt: DateTime
-
-  @column.dateTime({ autoCreate: true, autoUpdate: true })
-  declare updatedAt: DateTime
-
-  // -- Validation (VineJS type schemas) --
-  static validationSchema = {
-    title: vine.string().maxLength(255),
-    content: vine.string(),
-    status: vine.enum(['draft', 'published', 'archived']),
-  }
-
-  // Field permissions are controlled by the policy.
-
-  // -- Query Configuration --
-  static allowedFilters = ['status', 'user_id']
-  static allowedSorts = ['created_at', 'title', 'updated_at']
-  static defaultSort = '-created_at'
-  static allowedIncludes = ['user', 'comments']
-  static allowedSearch = ['title', 'content']
-
-  // -- Relationships --
-  @belongsTo(() => User)
-  declare user: BelongsTo<typeof User>
-
-  @hasMany(() => Comment)
-  declare comments: HasMany<typeof Comment>
+  @@map("posts")
 }
 ```
 
-:::tip RhinoModel
-`RhinoModel` extends `BaseModel` and includes `HasRhino`, `HasValidation`, `HidableColumns`, and `HasAutoScope` out of the box. Open the base class to see all available properties with types, defaults, and examples.
-
-For additional features, use `compose()` on top of `RhinoModel`:
-```ts
-import RhinoModel from '@rhino-dev/rhino-nestjs/models/rhino_model'
-import { compose } from '@nestjs/core/helpers'
-import { HasAuditTrail } from '@rhino-dev/rhino-nestjs/mixins/has_audit_trail'
-import { BelongsToOrganization } from '@rhino-dev/rhino-nestjs/mixins/belongs_to_organization'
-
-export default class Post extends compose(RhinoModel, HasAuditTrail, BelongsToOrganization) {
-  // ...
-}
-```
-:::
-
-Register it in `src/rhino.config.ts`:
+Register it in `src/rhino.config.ts`. The slug (`posts`) becomes the URL segment and permission prefix; `model` is the Prisma client delegate name (camelCase):
 
 ```ts title="src/rhino.config.ts"
+import { z } from 'zod';
+
 models: {
-  posts: () => import('#models/post'),
+  posts: {
+    model: 'post',
+    softDeletes: true,
+    allowedFilters: ['status', 'userId'],
+    allowedSorts: ['createdAt', 'title', 'updatedAt'],
+    defaultSort: '-createdAt',
+    allowedIncludes: ['author', 'comments'],
+    allowedSearch: ['title', 'content'],
+    validation: z.object({
+      title: z.string().max(255),
+      content: z.string(),
+      status: z.enum(['draft', 'published', 'archived']),
+    }),
+  },
 },
 ```
+
+:::tip ModelRegistration
+The object you pass per slug is a `ModelRegistration`. Every behavior — validation, soft deletes, audit trail, organization scoping, query configuration, policies, scopes — is declared here as plain fields. See [Model Configuration](./models) for the full reference.
+:::
 
 That is all you need. You now have a full REST API for posts:
 
@@ -241,8 +231,8 @@ Rhino also provides auth routes out of the box:
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/api/auth/login` | Login, returns API token |
-| `POST` | `/api/auth/logout` | Revoke all tokens |
+| `POST` | `/api/auth/login` | Login, returns JWT |
+| `POST` | `/api/auth/logout` | Log out |
 | `POST` | `/api/auth/password/recover` | Send password reset email |
 | `POST` | `/api/auth/password/reset` | Reset password with token |
 | `POST` | `/api/auth/register` | Register via invitation token |
@@ -253,13 +243,13 @@ Rhino also provides auth routes out of the box:
 npx prisma migrate deploy
 ```
 
-This will create the necessary tables for audit logs, invitations, and any model tables you have defined.
+This applies your Prisma migrations, creating the tables for audit logs, invitations, and any model tables you have defined.
 
 ## Next Steps
 
 - [Request Lifecycle](./request-lifecycle) -- how requests flow through the pipeline
-- [Model Configuration](./models) -- mixins, properties, relationships
+- [Model Configuration](./models) -- registration fields, relationships, scoping
 - [Route Groups](./route-groups) -- multi-tenant, admin, public, and custom route groups
-- [Validation](./validation) -- VineJS schemas and policy-driven field permissions
+- [Validation](./validation) -- Zod schemas and policy-driven field permissions
 - [Querying](./querying) -- filters, sorts, search, pagination, includes
 - [Policies](./policies) -- role-based authorization and permissions

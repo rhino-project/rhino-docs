@@ -9,53 +9,30 @@ Rhino supports soft deletes out of the box. When enabled on a model, the standar
 
 ## Enabling Soft Deletes
 
-Set the `softDeletes` static property on your model:
+Set `softDeletes: true` on the model registration in `src/rhino.config.ts`:
 
-```ts title="app/models/post.ts"
-import { DateTime } from 'luxon'
-import { BaseModel, column } from '@nestjs/lucid/orm'
-import { compose } from '@nestjs/core/helpers'
-import { HasRhino } from '@rhino-dev/rhino-nestjs/mixins/has_rhino'
+```ts title="src/rhino.config.ts"
+posts: {
+  model: 'post',
+  softDeletes: true,
+},
+```
 
-export default class Post extends compose(BaseModel, HasRhino) {
-  static softDeletes = true
+Your Prisma model must include a nullable `deletedAt` column:
 
-  @column({ isPrimary: true })
-  declare id: number
+```prisma title="prisma/schema.prisma"
+model Post {
+  id        Int       @id @default(autoincrement())
+  title     String
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 
-  @column()
-  declare title: string
-
-  @column.dateTime()
-  declare deletedAt: DateTime | null
-
-  @column.dateTime({ autoCreate: true })
-  declare createdAt: DateTime
-
-  @column.dateTime({ autoCreate: true, autoUpdate: true })
-  declare updatedAt: DateTime
+  @@map("posts")
 }
 ```
 
-Your database migration must include the `deleted_at` column:
-
-```ts title="database/migrations/create_posts_table.ts"
-import { BaseSchema } from '@nestjs/lucid/schema'
-
-export default class extends BaseSchema {
-  protected tableName = 'posts'
-
-  async up() {
-    this.schema.createTable(this.tableName, (table) => {
-      table.increments('id')
-      table.string('title').notNullable()
-      table.timestamp('deleted_at').nullable()
-      table.timestamp('created_at')
-      table.timestamp('updated_at')
-    })
-  }
-}
-```
+Run `npx prisma migrate dev` to add the column to your database.
 
 ## Soft Delete Endpoints
 
@@ -75,7 +52,7 @@ The standard `DELETE /api/posts/:id` endpoint performs a soft delete (sets `dele
 GET /api/posts/trashed
 ```
 
-Lists all soft-deleted records. Supports the same query parameters as the index endpoint (filters, sorts, search, includes, pagination, fields). The query uses Prisma's `onlyTrashed()` scope to return only records where `deleted_at` is not null.
+Lists all soft-deleted records. Supports the same query parameters as the index endpoint (filters, sorts, search, includes, pagination, fields). The query filters to records where `deletedAt` is not null.
 
 ```bash title="terminal"
 # List trashed posts with sorting
@@ -94,9 +71,7 @@ GET /api/posts/trashed?page=1&per_page=10
 POST /api/posts/:id/restore
 ```
 
-Restores a soft-deleted record by setting `deleted_at` back to `null`. The record must be in the trashed state. Returns the restored record as JSON.
-
-If the model has a `restore()` instance method, Rhino calls it. Otherwise, it manually sets `deletedAt` (and `discardedAt` if present) to `null` and saves.
+Restores a soft-deleted record by setting `deletedAt` back to `null`. The record must be in the trashed state. Returns the restored record as JSON.
 
 ### Force Delete Endpoint
 
@@ -104,33 +79,31 @@ If the model has a `restore()` instance method, Rhino calls it. Otherwise, it ma
 DELETE /api/posts/:id/force-delete
 ```
 
-Permanently removes the record from the database. The record must be in the trashed state (soft-deleted first). Returns `204 No Content` on success.
-
-If the model has a `forceDelete()` instance method, Rhino calls it. Otherwise, it performs a raw delete query.
+Permanently removes the record from the database via a hard Prisma `delete`. The record must be in the trashed state (soft-deleted first). Returns `204 No Content` on success.
 
 ## Authorization
 
 Each soft-delete action has its own policy method:
 
-```ts title="app/policies/post_policy.ts"
-import { ResourcePolicy } from '@rhino-dev/rhino-nestjs/policies/resource_policy'
+```ts title="src/policies/PostPolicy.ts"
+import { ResourcePolicy } from '@rhino-dev/rhino-nestjs';
 
-export default class PostPolicy extends ResourcePolicy {
-  static resourceSlug = 'posts'
+export class PostPolicy extends ResourcePolicy {
+  override resourceSlug = 'posts';
 
   // Permission: posts.trashed
-  async viewTrashed(user: any): Promise<boolean> {
-    return this.checkPermission(user, 'trashed')
+  override viewTrashed(user: any, org?: any): boolean {
+    return this.checkPermission(user, 'trashed', org);
   }
 
   // Permission: posts.restore
-  async restore(user: any, record: any): Promise<boolean> {
-    return this.checkPermission(user, 'restore')
+  override restore(user: any, _record: any, org?: any): boolean {
+    return this.checkPermission(user, 'restore', org);
   }
 
   // Permission: posts.forceDelete
-  async forceDelete(user: any, record: any): Promise<boolean> {
-    return this.checkPermission(user, 'forceDelete')
+  override forceDelete(user: any, _record: any, org?: any): boolean {
+    return this.checkPermission(user, 'forceDelete', org);
   }
 }
 ```
@@ -141,24 +114,24 @@ These methods are already implemented on `ResourcePolicy`, so you only need to o
 
 If you want soft deletes but do not want certain endpoints (e.g., you want to prevent force deletion via the API), use `exceptActions`:
 
-```ts title="app/models/post.ts"
-export default class Post extends compose(BaseModel, HasRhino) {
-  static softDeletes = true
-
+```ts title="src/rhino.config.ts"
+posts: {
+  model: 'post',
+  softDeletes: true,
   // Allow trashed listing and restore, but no force-delete via API
-  static exceptActions = ['forceDelete']
-}
+  exceptActions: ['forceDelete'],
+},
 ```
 
 ## Audit Trail Integration
 
-When the `HasAuditTrail` mixin is also applied, soft delete operations are automatically logged with the appropriate action type:
+When `hasAuditTrail: true` is also set on the registration, soft delete operations are automatically logged with the appropriate action type:
 
 - Standard `DELETE` -- logged as `deleted`
 - `POST /:id/restore` -- logged as `restored`
 - `DELETE /:id/force-delete` -- logged as `force_deleted`
 
-The `ResourcesController` calls `logRestore()` after restoring and `logForceDelete()` before permanently deleting, so the audit trail captures the full lifecycle of soft-deleted records.
+Rhino records the restore entry after restoring and the force-delete entry before permanently deleting, so the audit trail captures the full lifecycle of soft-deleted records.
 
 ## Guard Behavior
 

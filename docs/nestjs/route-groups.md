@@ -7,76 +7,61 @@ title: Route Groups
 
 Route groups let you register the same models under multiple URL prefixes, each with its own middleware stack and authentication behavior. This enables hybrid routing where different parts of your application serve the same data with different access rules.
 
-## Route Registration with `rhinoRoutes()`
+## Route Registration
 
-The recommended way to register Rhino routes is to use the `rhinoRoutes()` helper in your `start/routes.ts` file. This helper reads your configuration and registers all CRUD routes, auth routes, invitation routes, and nested operation routes automatically:
+Routes are registered automatically. Define your route groups in the `RhinoConfig` you pass to `RhinoModule.forRoot()`, then call `applyRhinoRouting()` in `main.ts`:
 
-```ts title="start/routes.ts"
-import router from '@nestjs/core/services/router'
-import { rhinoRoutes } from '@rhino-dev/rhino-nestjs/route_helper'
-import { middleware } from '#start/kernel'
+```ts title="src/main.ts"
+import { NestFactory } from '@nestjs/core';
+import { applyRhinoRouting } from '@rhino-dev/rhino-nestjs';
+import { AppModule } from './app.module';
 
-rhinoRoutes(router, middleware, {
-  config: {
-    models: {
-      projects: true,
-      tasks: true,
-      comments: true,
-    },
-    routeGroups: {
-      tenant: { prefix: ':organization' },
-    },
-    nested: { path: 'nested' },
-  },
-})
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+  applyRhinoRouting(app, { prefix: 'api' });
+  await app.listen(3000);
+}
+bootstrap();
 ```
 
-The `rhinoRoutes()` helper accepts three arguments:
-
-| Argument | Type | Description |
-|----------|------|-------------|
-| `router` | `Router` | The NestJS router instance |
-| `middleware` | `MiddlewareStore` | The middleware store from `#start/kernel` |
-| `config` | `object` | Configuration object with `models`, `routeGroups`, and `nested` settings |
-
-For `models`, you can pass `true` as the value to use the default model import convention, or pass a full configuration object.
+`applyRhinoRouting()` reads your configuration and registers all CRUD routes, auth routes, invitation routes, and nested operation routes for every group automatically.
 
 ## Configuration
 
-Define route groups in `src/rhino.config.ts`:
+Define route groups in `src/rhino.config.ts`. Middleware entries are NestJS middleware **classes** (`Type<NestMiddleware>`), not string names:
 
 ```ts title="src/rhino.config.ts"
-import { RhinoModule } from "@rhino-dev/rhino-nestjs";  // wire via RhinoModule.forRoot() in your AppModule
+import { ResolveOrganizationMiddleware } from '@rhino-dev/rhino-nestjs';
 
-RhinoModule.forRoot({
-  models: {
-    posts: () => import('#models/post'),
-    comments: () => import('#models/comment'),
-    categories: () => import('#models/category'),
-  },
+// Inside the RhinoConfig object passed to RhinoModule.forRoot()
+models: {
+  posts:      { model: 'post' },
+  comments:   { model: 'comment' },
+  categories: { model: 'category' },
+},
 
-  routeGroups: {
-    tenant: {
-      prefix: ':organization',
-      middleware: ['rhino:resolveOrg'],
-      models: '*',
-    },
-    admin: {
-      prefix: 'admin',
-      middleware: [],
-      models: '*',
-    },
-    public: {
-      prefix: 'public',
-      middleware: [],
-      models: ['categories'],
-    },
+routeGroups: {
+  tenant: {
+    prefix: ':organization',
+    middleware: [ResolveOrganizationMiddleware],
+    models: '*',
   },
+  admin: {
+    prefix: 'admin',
+    tenant: false,
+    models: '*',
+  },
+  public: {
+    prefix: 'public',
+    skipAuth: true,
+    models: ['categories'],
+  },
+},
 
-  multiTenant: {
-    organizationIdentifierColumn: 'slug',
-  },
-})
+multiTenant: {
+  enabled: true,
+  organizationIdentifierColumn: 'slug',
+},
 ```
 
 ### Structure
@@ -101,10 +86,10 @@ Two group names have special behavior:
 - **`tenant`** -- Rhino detects this name and:
   - Registers invitation CRUD routes under the tenant prefix
   - Registers the nested operations endpoint under the tenant prefix
-  - The middleware (e.g., `rhino:resolveOrg`) sets `ctx.organization`, enabling automatic organization scoping
+  - The middleware (`ResolveOrganizationMiddleware`) sets `req.organization`, enabling automatic organization scoping
 
 - **`public`** -- Rhino detects this name and:
-  - Skips the `auth` middleware for all routes in this group
+  - Implies `skipAuth: true`, so the JWT guard is skipped for all routes in this group
 
 Any other group name (e.g., `'driver'`, `'admin'`, `'default'`) is treated as a standard authenticated group.
 
@@ -315,7 +300,6 @@ joins:
 routeGroups: {
   default: {
     prefix: '',
-    middleware: [],
     models: '*',
   },
 },
@@ -326,14 +310,17 @@ Routes: `GET /api/posts`, `POST /api/posts`, etc. All routes require authenticat
 ### Simple Multi-Tenant App
 
 ```ts title="src/rhino.config.ts"
+import { ResolveOrganizationMiddleware } from '@rhino-dev/rhino-nestjs';
+
 routeGroups: {
   tenant: {
     prefix: ':organization',
-    middleware: ['rhino:resolveOrg'],
+    middleware: [ResolveOrganizationMiddleware],
     models: '*',
   },
 },
 multiTenant: {
+  enabled: true,
   organizationIdentifierColumn: 'slug',
 },
 ```
@@ -343,35 +330,37 @@ Routes: `GET /api/:organization/posts`, etc. All routes require auth + organizat
 ### Hybrid Platform
 
 ```ts title="src/rhino.config.ts"
+import { ResolveOrganizationMiddleware } from '@rhino-dev/rhino-nestjs';
+
 models: {
-  trips: () => import('#models/trip'),
-  trucks: () => import('#models/truck'),
-  materials: () => import('#models/material'),
+  trips:     { model: 'trip' },
+  trucks:    { model: 'truck' },
+  materials: { model: 'material' },
 },
 
 routeGroups: {
   // Customer dashboard -- org-scoped
   tenant: {
     prefix: ':organization',
-    middleware: ['rhino:resolveOrg'],
+    middleware: [ResolveOrganizationMiddleware],
     models: '*',
   },
   // Driver app -- authenticated, not org-scoped
   driver: {
     prefix: 'driver',
-    middleware: [],
+    tenant: false,
     models: ['trips', 'trucks'],
   },
   // Admin panel -- authenticated, global access
   admin: {
     prefix: 'admin',
-    middleware: [],
+    tenant: false,
     models: '*',
   },
   // Public API -- no auth
   public: {
     prefix: 'public',
-    middleware: [],
+    skipAuth: true,
     models: ['materials'],
   },
 },
@@ -393,32 +382,37 @@ Generated routes:
 
 Organization scoping is implicit, based on the middleware stack:
 
-- **Organization present** (set by middleware like `rhino:resolveOrg`): scoping is applied automatically.
+- **Organization present** (set by `ResolveOrganizationMiddleware`): scoping is applied automatically.
 - **Organization absent** (no middleware sets it): scoping is skipped, query returns all records.
 
 This means:
-- `tenant` group routes get org scoping automatically (their middleware sets the org on the context).
+- `tenant` group routes get org scoping automatically (their middleware sets `req.organization`).
 - Non-tenant group routes skip org scoping naturally (no middleware sets an org).
 - **No configuration flag needed** -- the behavior is implicit based on the middleware stack.
 
 ## Custom Scoping for Non-Tenant Groups
 
-For non-tenant groups (e.g., `driver`, `admin`), custom data filtering is implemented at the application level using NestJS model scopes:
+For non-tenant groups (e.g., `driver`, `admin`), custom data filtering is implemented with a `RhinoScope` class attached to the model registration via `scopes`. The scope's `apply(where, ctx)` augments the Prisma `where` clause; `ctx` includes the current user and resolved route group:
 
-```ts title="app/models/trip.ts"
-import { scope } from '@nestjs/lucid/orm'
+```ts title="src/scopes/TripScope.ts"
+import type { RhinoScope } from '@rhino-dev/rhino-nestjs';
 
-export default class Trip extends RhinoModel {
-  @scope()
-  public static forDriver(
-    query: ModelQueryBuilderContract<typeof Trip>,
-    ctx: HttpContext
-  ) {
-    if (ctx.routeGroup === 'driver') {
-      query.where('driver_id', ctx.auth.user!.driverId)
+export class TripScope implements RhinoScope {
+  apply(where: Record<string, any>, ctx: { user?: any; routeGroup?: string | null }) {
+    if (ctx.routeGroup === 'driver' && ctx.user?.driverId) {
+      return { ...where, driverId: ctx.user.driverId };
     }
+    return where;
   }
 }
+```
+
+```ts title="src/rhino.config.ts"
+import { TripScope } from './scopes/TripScope';
+
+models: {
+  trips: { model: 'trip', scopes: [TripScope] },
+},
 ```
 
 ## Permission Resolution
@@ -427,7 +421,7 @@ Two permission sources are used, determined by the route group context:
 
 | Route Group | Permission Source | Description |
 |-------------|------------------|-------------|
-| `'tenant'` | `userRoles.permissions` | Organization-scoped, checked per-org |
+| `'tenant'` | `user_roles.permissions` | Organization-scoped, checked per-org |
 | Any other | `users.permissions` | User-level, checked directly on the user model |
 
 The decision is deterministic based on the presence of an organization in the request context. There is no fallback chain. See [Policies](./policies) for details.

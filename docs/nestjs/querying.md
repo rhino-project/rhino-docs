@@ -5,36 +5,34 @@ title: Querying
 
 # Advanced Querying
 
-Every Rhino endpoint supports filtering, sorting, search, pagination, field selection, and eager loading -- all via query parameters. The `RhinoQueryBuilder` translates URL parameters into Prisma queries, providing an API surface identical to the Laravel server.
+Every Rhino endpoint supports filtering, sorting, search, pagination, field selection, and eager loading -- all via query parameters. The `QueryBuilderService` translates URL parameters into Prisma queries.
 
 ## Model Configuration
 
-Define what is queryable on your model using the `HasRhino` mixin properties:
+Define what is queryable on the model registration in `src/rhino.config.ts`:
 
-```ts title="app/models/post.ts"
-import { BaseModel, column, belongsTo, hasMany } from '@nestjs/lucid/orm'
-import { compose } from '@nestjs/core/helpers'
-import { HasRhino } from '@rhino-dev/rhino-nestjs/mixins/has_rhino'
+```ts title="src/rhino.config.ts"
+posts: {
+  model: 'post',
 
-export default class Post extends compose(BaseModel, HasRhino) {
   // Fields that can be filtered
-  static allowedFilters = ['status', 'user_id', 'category_id']
+  allowedFilters: ['status', 'userId', 'categoryId'],
 
   // Fields that can be sorted
-  static allowedSorts = ['created_at', 'title', 'updated_at', 'published_at']
+  allowedSorts: ['createdAt', 'title', 'updatedAt', 'publishedAt'],
 
   // Default sort when none specified (prefix with - for descending)
-  static defaultSort = '-created_at'
+  defaultSort: '-createdAt',
 
   // Fields that can be selected
-  static allowedFields = ['id', 'title', 'content', 'status', 'created_at']
+  allowedFields: ['id', 'title', 'content', 'status', 'createdAt'],
 
-  // Relationships that can be eager loaded
-  static allowedIncludes = ['user', 'comments', 'tags', 'category']
+  // Prisma relations that can be eager loaded
+  allowedIncludes: ['author', 'comments', 'tags', 'category'],
 
   // Fields searched with ?search= parameter
-  static allowedSearch = ['title', 'content', 'user.name']
-}
+  allowedSearch: ['title', 'content', 'author.name'],
+},
 ```
 
 :::warning
@@ -95,7 +93,7 @@ Only fields listed in `allowedSorts` can be sorted. If no sort is specified, `de
 Every model can specify a default sort that applies when no `?sort` parameter is provided:
 
 ```ts
-static defaultSort = '-created_at'
+defaultSort: '-createdAt',
 ```
 
 The default sort supports the same comma-separated format as the query parameter. Use the `-` prefix for descending order.
@@ -108,23 +106,23 @@ Full-text search across configured fields:
 GET /api/posts?search=nestjs
 ```
 
-Searches across all fields listed in `allowedSearch`. The query builder produces an `OR ILIKE '%term%'` clause for each configured column, wrapped in a single `WHERE (...)` group.
+Searches across all fields listed in `allowedSearch`. The query builder produces an `OR` group of case-insensitive `contains` conditions, one for each configured column.
 
 ### Relationship Search
 
 You can search across relationships using dot notation:
 
 ```ts
-// Model config
-static allowedSearch = ['title', 'content', 'user.name']
+// Model registration
+allowedSearch: ['title', 'content', 'author.name'],
 ```
 
 ```bash title="terminal"
-# This searches in post.title, post.content, AND user.name
+# This searches in post.title, post.content, AND author.name
 GET /api/posts?search=john
 ```
 
-Dot-notation columns (e.g., `user.name`) are resolved via `whereHas` on the relationship so that the `ILIKE` runs on the related table.
+Dot-notation columns (e.g., `author.name`) are resolved with a nested Prisma relation filter so the `contains` match runs on the related table.
 
 :::tip Combine search with filters
 ```bash title="terminal"
@@ -173,18 +171,20 @@ The `per_page` value is clamped to the range [1, 100]. Requesting `per_page=0` i
 
 To return all results without pagination:
 
-```ts
-export default class Tag extends compose(BaseModel, HasRhino) {
-  static paginationEnabled = false
-}
+```ts title="src/rhino.config.ts"
+tags: {
+  model: 'tag',
+  paginationEnabled: false,
+},
 ```
 
 ### Changing Default Page Size
 
-```ts
-export default class Post extends compose(BaseModel, HasRhino) {
-  static perPage = 25 // Default items per page (default is 15)
-}
+```ts title="src/rhino.config.ts"
+posts: {
+  model: 'post',
+  perPage: 25, // Default items per page (default is 25)
+},
 ```
 
 ### Pagination Behavior Summary
@@ -192,8 +192,8 @@ export default class Post extends compose(BaseModel, HasRhino) {
 | Scenario | Result |
 |----------|--------|
 | No `?per_page`, `paginationEnabled = false` | Returns all results (no pagination) |
-| No `?per_page`, `paginationEnabled = true` | Uses model's `perPage` (default 15) |
-| `?per_page=20` | Overrides model default, paginates at 20 |
+| No `?per_page`, `paginationEnabled = true` | Uses the registration's `perPage` (default 25) |
+| `?per_page=20` | Overrides the default, paginates at 20 |
 | `?per_page=0` | Clamped to 1 |
 | `?per_page=500` | Clamped to 100 |
 
@@ -232,7 +232,7 @@ GET /api/posts?include=user,comments,tags
 GET /api/posts?include=comments.user
 ```
 
-Only relationships listed in `allowedIncludes` can be loaded. Nested includes (e.g., `comments.user`) are supported via chained `preload` calls -- the top-level segment must be in the allowed list.
+Only relationships listed in `allowedIncludes` can be loaded. Nested includes (e.g., `comments.user`) are supported via nested Prisma `include` clauses -- the top-level segment must be in the allowed list.
 
 ### Count and Exists
 

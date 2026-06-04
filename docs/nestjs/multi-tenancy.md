@@ -11,30 +11,35 @@ Multi-tenancy is configured via [Route Groups](./route-groups). Use a `tenant` r
 
 ## Configuration
 
-Enable multi-tenancy by adding a `tenant` route group in `src/rhino.config.ts`:
+Enable multi-tenancy by adding a `tenant` route group and a `multiTenant` block in `src/rhino.config.ts`:
 
 ```ts title="src/rhino.config.ts"
-import { RhinoModule } from "@rhino-dev/rhino-nestjs";  // wire via RhinoModule.forRoot() in your AppModule
+import { ResolveOrganizationMiddleware } from '@rhino-dev/rhino-nestjs';
 
-RhinoModule.forRoot({
-  routeGroups: {
-    tenant: {
-      prefix: ':organization',
-      middleware: ['rhino:resolveOrg'],
-      models: '*',
-    },
+// Inside the RhinoConfig object passed to RhinoModule.forRoot()
+routeGroups: {
+  tenant: {
+    prefix: ':organization',
+    middleware: [ResolveOrganizationMiddleware],
+    models: '*',
   },
-  multiTenant: {
-    organizationIdentifierColumn: 'slug',
-  },
-})
+},
+multiTenant: {
+  enabled: true,
+  organizationIdentifierColumn: 'slug',
+  organizationModel: 'organization',
+  userOrganizationModel: 'userRole',
+},
 ```
 
 ### Config Options
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
+| `enabled` | `boolean` | `false` | Master switch for multi-tenancy. |
 | `organizationIdentifierColumn` | `string` | `'id'` | The column used to look up the organization. Common values: `'id'`, `'slug'`, `'uuid'`. |
+| `organizationModel` | `string` | `'organization'` | The Prisma model name for organizations. |
+| `userOrganizationModel` | `string` | `'userRole'` | The Prisma model name for the user-organization membership join. |
 
 ## Routing Strategies
 
@@ -43,10 +48,12 @@ RhinoModule.forRoot({
 Use a `tenant` route group with a parameterized prefix:
 
 ```ts title="src/rhino.config.ts"
+import { ResolveOrganizationMiddleware } from '@rhino-dev/rhino-nestjs';
+
 routeGroups: {
   tenant: {
     prefix: ':organization',
-    middleware: ['rhino:resolveOrg'],
+    middleware: [ResolveOrganizationMiddleware],
     models: '*',
   },
 },
@@ -62,20 +69,27 @@ PUT    /api/:organization/posts/:id
 DELETE /api/:organization/posts/:id
 ```
 
-The `ResolveOrganizationFromRoute` middleware extracts the `:organization` parameter and looks up the Organization model by the configured identifier column.
+`ResolveOrganizationMiddleware` extracts the `:organization` parameter and looks up the Organization model by the configured identifier column.
 
 ### Subdomain Mode
 
-Use a `tenant` route group with the subdomain middleware:
+For host-based tenancy, give a group a parameterized `domain` and resolve the organization at the Express layer with `createDomainRouteResolver` in `main.ts`:
 
 ```ts title="src/rhino.config.ts"
 routeGroups: {
   tenant: {
     prefix: '',
-    middleware: ['rhino:resolveOrgSubdomain'],
+    domain: '{organization}.example.com',
     models: '*',
   },
 },
+```
+
+```ts title="src/main.ts"
+import { createDomainRouteResolver } from '@rhino-dev/rhino-nestjs';
+
+app.use(createDomainRouteResolver({ prisma, config }));
+applyRhinoRouting(app, { prefix: 'api' });
 ```
 
 Routes:
@@ -85,152 +99,93 @@ GET    https://acme.example.com/api/posts
 POST   https://acme.example.com/api/posts
 ```
 
-The `ResolveOrganizationFromSubdomain` middleware extracts the subdomain (e.g., `acme` from `acme.example.com`) and looks up the organization by the `domain` column first, then by the identifier column.
+The captured `{organization}` subdomain feeds organization resolution exactly like the `:organization` path prefix. See [Route Groups → Domain Constraints](./route-groups#domain-constraints).
 
-The following subdomains are skipped (treated as non-tenant): `www`, `app`, `api`, `localhost`, `127.0.0.1`.
+## ResolveOrganizationMiddleware
 
-## ResolveOrganizationFromRoute Middleware
-
-This middleware handles URL-prefix-based tenant resolution:
+This middleware handles tenant resolution from the `:organization` route parameter:
 
 1. Extracts the `organization` parameter from the route
 2. Looks up the Organization model by the configured `organizationIdentifierColumn`
 3. Verifies the authenticated user belongs to the organization
-4. Sets `ctx.organization` for downstream controllers and policies
+4. Sets `req.organization` for downstream controllers and policies
 
 ```ts
-import ResolveOrganizationFromRoute from '@rhino-dev/rhino-nestjs/middleware/resolve_organization_from_route'
+import { ResolveOrganizationMiddleware } from '@rhino-dev/rhino-nestjs';
 ```
 
 If the organization is not found, a `404` is returned. If the user does not belong to the organization, a `404` is returned (to avoid leaking the existence of organizations).
 
-## ResolveOrganizationFromSubdomain Middleware
+## Organization Scoping (`belongsToOrganization`)
 
-This middleware handles subdomain-based tenant resolution:
+Set `belongsToOrganization: true` on a model registration to enable automatic organization scoping. The model's Prisma definition should include an `organizationId` column and an `organization` relation:
 
-1. Extracts the subdomain from the `Host` header (strips port if present)
-2. Skips known non-tenant subdomains (`www`, `app`, `api`, `localhost`)
-3. Looks up the Organization model by `domain` column or by the identifier column
-4. Verifies the authenticated user belongs to the organization
-5. Sets `ctx.organization` for downstream consumers
+```prisma title="prisma/schema.prisma"
+model Post {
+  id             Int          @id @default(autoincrement())
+  organizationId Int
+  // ...
+  organization   Organization @relation(fields: [organizationId], references: [id])
 
-```ts
-import ResolveOrganizationFromSubdomain from '@rhino-dev/rhino-nestjs/middleware/resolve_organization_from_subdomain'
-```
-
-If the user does not belong to the organization in subdomain mode, a `403` is returned.
-
-## BelongsToOrganization Mixin
-
-The `BelongsToOrganization` mixin provides automatic organization scoping at the model level:
-
-```ts title="app/models/post.ts"
-import { compose } from '@nestjs/core/helpers'
-import { BaseModel, column, belongsTo } from '@nestjs/lucid/orm'
-import type { BelongsTo } from '@nestjs/lucid/types/relations'
-import { BelongsToOrganization } from '@rhino-dev/rhino-nestjs/mixins/belongs_to_organization'
-import Organization from '#models/organization'
-
-export default class Post extends compose(BaseModel, BelongsToOrganization) {
-  @column()
-  declare organizationId: number
-
-  @belongsTo(() => Organization)
-  declare organization: BelongsTo<typeof Organization>
+  @@map("posts")
 }
 ```
 
-### What the Mixin Does
-
-**Auto-sets `organizationId` on create:**
-
-A `before:create` hook automatically sets `organizationId` from the current HTTP context (via `ctx.organization.id`). This is skipped if:
-- The `organizationId` is already set explicitly
-- The code is running outside an HTTP context (e.g., Ace commands, tests, queue workers)
-
-**Global query scope:**
-
-The mixin uses Prisma hooks (`before('find')`, `before('fetch')`, `before('paginate')`) to automatically filter by `organization_id` when an HTTP context with an organization is available. This means every query for the model is tenant-scoped without any manual intervention:
-
-```ts
-// Automatically scoped to the current organization
-const posts = await Post.query().where('status', 'published')
-// SQL: SELECT * FROM posts WHERE organization_id = ? AND status = 'published'
+```ts title="src/rhino.config.ts"
+posts: {
+  model: 'post',
+  belongsToOrganization: true,
+},
 ```
 
-**Manual scoping:**
+### What it Does
 
-For contexts outside of HTTP requests (background jobs, admin tools), use the static `scopeForOrganization()` method:
+**Auto-sets `organizationId` on create:** When an organization is present in the request context, Rhino sets `organizationId` from `req.organization.id` on create. Client-supplied `organizationId` is stripped from the input — the org always comes from the resolved request context.
 
-```ts
-const posts = await Post.query()
-  .apply((scopes) => Post.scopeForOrganization(scopes, organization))
+**Scopes every query:** When an organization is present, Rhino filters each query to that organization (`WHERE organizationId = ?`). Outside an HTTP request (scripts, tests, queue workers), no organization is set, so scoping is skipped.
+
+## Nested Organization Scoping
+
+Not every model has a direct `organizationId` column. For child models, set `owner` to the relation Rhino should walk to find the organization:
+
+```ts title="src/rhino.config.ts"
+comments: {
+  model: 'comment',
+  owner: 'post', // Comment -> post -> organization
+},
 ```
 
-Or directly:
-
-```ts
-Post.scopeForOrganization(query, organization)
-```
-
-:::info
-The global organization scope is skipped when running in a console context (e.g., Ace commands, tests, queue workers) since there is no HTTP request context available.
-:::
-
-## Nested Organization Scoping (Auto-Detected)
-
-Not every model has a direct `organization_id` column. For nested models, Rhino automatically walks `belongsTo` relationships to find the nearest model that holds the organization reference. No explicit configuration is needed:
-
-```ts title="app/models/comment.ts"
-export default class Comment extends compose(BaseModel, HasRhino, BelongsToOrganization) {
-  // Organization path is auto-detected: Comment -> post -> organization
-  @column()
-  declare postId: number
-
-  @belongsTo(() => Post)
-  declare post: BelongsTo<typeof Post>
-}
-```
-
-Rhino traverses `Comment -> post` to find the organization using a nested `whereHas` call:
+Rhino traverses `Comment -> post` to find the organization using a nested Prisma relation filter, equivalent to:
 
 ```sql
 SELECT * FROM comments
 WHERE EXISTS (
   SELECT 1 FROM posts WHERE posts.id = comments.post_id AND posts.organization_id = ?
-)
+);
 ```
 
-Deep nesting is also auto-detected (e.g., `Reply -> comment -> post -> organization`).
+Deeper chains are also supported (e.g., `Reply -> comment -> post -> organization`).
 
 ## Organization Scope Precedence
 
-The `ResourcesController` applies organization scoping using the following order of precedence:
+The controller applies organization scoping using the following order of precedence:
 
 1. **Resource IS the Organization model** -- restrict to the current org's primary key
-2. **Model has `scopeForOrganization` static method** -- delegate to the custom scope
-3. **Model has `organization_id` column** -- simple `WHERE organization_id = ?`
-4. **Auto-detected `belongsTo` chain** -- Rhino walks `belongsTo` relationships to find a model with `organization_id`
-5. **Model has `organization` or `organizations` relationship** -- use `whereHas`
-6. **No relationship found** -- model is global (no scope applied)
+2. **Model has an `organizationId` column** -- simple `WHERE organizationId = ?`
+3. **`owner` chain is configured / auto-detected** -- walk the named relation(s) to a model with `organizationId` and filter via a nested relation condition
+4. **No relationship found** -- model is global (no scope applied)
 
 ## Auto-Setting Organization on Create
 
-When creating a record via `POST /api/:organization/posts`, the controller automatically adds `organization_id` to the data if:
+When creating a record via `POST /api/:organization/posts`, the controller automatically adds `organizationId` to the data if:
 - An organization is present in the request context (set by middleware)
-- The model has an `organizationId` or `organization_id` column
+- The registration has `belongsToOrganization: true` and the model has an `organizationId` column
 
-This happens in the controller layer, independent of the `BelongsToOrganization` mixin. Using both provides defense-in-depth.
+Client-supplied `organizationId` is always stripped from the input first — the value comes from the resolved request context, never from the request body.
 
 ## Membership Verification
 
-Both middleware classes verify that the authenticated user belongs to the resolved organization. The check supports three strategies in order:
-
-1. **Prisma relationship query** -- `user.related('organizations').query().where('organizations.id', org.id)`
-2. **Preloaded organizations array** -- checks `user.organizations` for a matching id
-3. **Explicit helper method** -- calls `user.belongsToOrganization(org)` if defined
-
-If none of these strategies find a match, the middleware denies access.
+`ResolveOrganizationMiddleware` verifies that the authenticated user belongs to the resolved organization by checking the user-organization membership model (`userOrganizationModel`, default `userRole`) for a row matching the user and organization. If no membership row is found, the middleware denies access (`404` to avoid leaking which organizations exist).
 
 ## Group Membership Enforcement
 

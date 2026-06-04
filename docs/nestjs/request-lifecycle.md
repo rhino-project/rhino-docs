@@ -15,7 +15,7 @@ flowchart TD
     B --> C[Auth Middleware - skipped for public group]
     C --> D[Route Group Middleware]
     D --> E[Model Middleware]
-    E --> F[ResourcesController]
+    E --> F[GlobalController]
     F --> G{Policy Check}
     G -->|Denied| H[403 Forbidden]
     G -->|Allowed| I[Organization Scope - tenant group only]
@@ -29,7 +29,7 @@ flowchart TD
 
 ### 1. Route Matching
 
-When you register a model in `src/rhino.config.ts`, Rhino generates a set of routes automatically. Each route is bound to a specific action on the `ResourcesController`:
+When you register a model in `src/rhino.config.ts`, Rhino generates a set of routes automatically. Each route is bound to a specific action on the `GlobalController`:
 
 | Action | Route | Controller Method |
 |--------|-------|-------------------|
@@ -42,65 +42,57 @@ When you register a model in `src/rhino.config.ts`, Rhino generates a set of rou
 | Restore | `POST /api/:model/:id/restore` | `restore()` |
 | Force Delete | `DELETE /api/:model/:id/force-delete` | `forceDelete()` |
 
-The model slug and route group key are stored in the route metadata, so the controller knows which model class to resolve. Routes are named `rhino.{group}.{slug}.{action}` (e.g., `rhino.tenant.posts.index`). See [Route Groups](./route-groups) for details.
+The model slug and route group key are stored in the route metadata, so the controller knows which model registration to resolve. Routes are named `rhino.{group}.{slug}.{action}` (e.g., `rhino.tenant.posts.index`). See [Route Groups](./route-groups) for details.
 
-### 2. Auth Middleware
+### 2. Auth Guard
 
-For route groups other than `public`, the NestJS auth middleware runs first. It verifies the API token from the `Authorization: Bearer <token>` header and attaches the authenticated user to `ctx.auth.user`.
+For route groups other than `public`, the `JwtAuthGuard` runs first. It verifies the JWT from the `Authorization: Bearer <token>` header and attaches the authenticated user to `req.user`.
 
-Routes in the `public` route group skip this step entirely.
+Routes in groups with `skipAuth: true` (such as the reserved `public` group) skip this step.
 
 ### 3. Route Group Middleware & Organization Resolution
 
-Middleware defined in the route group config runs next. For the `tenant` route group, this typically includes one of two organization-resolving middleware classes:
+Middleware classes defined on the route group run next. For the `tenant` route group, this is typically `ResolveOrganizationMiddleware`, which:
 
-- **`ResolveOrganizationFromRoute`** -- Extracts the `:organization` route parameter and looks up the Organization model by the configured identifier column (`id`, `slug`, or `uuid`). Verifies the authenticated user belongs to the organization.
-
-- **`ResolveOrganizationFromSubdomain`** -- Extracts the subdomain from the `Host` header (e.g., `acme` from `acme.example.com`). Skips known non-tenant subdomains (`www`, `app`, `api`, `localhost`). Looks up by `domain` column first, then by the identifier column.
-
-Both middleware classes set `ctx.organization` for downstream consumers.
+- Extracts the `:organization` route parameter (or resolves it from the host for subdomain mode) and looks up the Organization model by the configured identifier column (`id`, `slug`, or `uuid`).
+- Verifies the authenticated user belongs to the organization.
+- Sets `req.organization` for downstream consumers.
 
 ### 4. Model Middleware
 
-If the model defines `routeMiddleware` or `middlewareActions`, those middleware names are applied to the appropriate routes during registration:
+If the registration defines `middleware` or `actionMiddleware`, those NestJS middleware classes are applied to the appropriate routes during registration:
 
-```ts title="app/models/post.ts"
-export default class Post extends compose(BaseModel, HasRhino) {
+```ts title="src/rhino.config.ts"
+posts: {
+  model: 'post',
   // Applied to all routes for this model
-  static routeMiddleware = ['throttle:60,1']
-
+  middleware: [ThrottleMiddleware],
   // Applied only to specific actions
-  static middlewareActions = {
-    store: ['verified'],
-    destroy: ['admin'],
-  }
-}
+  actionMiddleware: {
+    store: [VerifiedMiddleware],
+    destroy: [AdminMiddleware],
+  },
+},
 ```
 
 ### 5. Model Resolution
 
-The `ResourcesController` extracts the model slug from the route metadata and uses the `models` map in `src/rhino.config.ts` to dynamically import the model class:
-
-```ts
-const loader = config.models[slug]  // e.g. () => import('#models/post')
-const module = await loader()
-const modelClass = module.default    // The Prisma model class
-```
+The `GlobalController` extracts the model slug from the route metadata, looks up the `ModelRegistration` in the `models` map, and accesses the corresponding Prisma delegate via `PrismaService.model(registration.model)`.
 
 ### 6. Authorization
 
-The controller resolves the policy class from the model's static `policy` property (if defined) and calls the appropriate policy method:
+The controller resolves the policy from the registration's `policy` field (if defined) and calls the appropriate policy method (each also receives the resolved organization for tenant routes):
 
 | Action | Policy Method | Arguments |
 |--------|--------------|-----------|
-| Index | `viewAny(user, modelClass)` | Model class |
-| Show | `view(user, record)` | Loaded record |
-| Store | `create(user, modelClass)` | Model class |
-| Update | `update(user, record)` | Loaded record |
-| Destroy | `delete(user, record)` | Loaded record |
-| Trashed | `viewTrashed(user, modelClass)` | Model class |
-| Restore | `restore(user, record)` | Loaded record |
-| Force Delete | `forceDelete(user, record)` | Loaded record |
+| Index | `viewAny(user, org?)` | — |
+| Show | `view(user, record, org?)` | Loaded record |
+| Store | `create(user, org?)` | — |
+| Update | `update(user, record, org?)` | Loaded record |
+| Destroy | `delete(user, record, org?)` | Loaded record |
+| Trashed | `viewTrashed(user, org?)` | — |
+| Restore | `restore(user, record, org?)` | Loaded record |
+| Force Delete | `forceDelete(user, record, org?)` | Loaded record |
 
 If no policy is defined, all actions are allowed.
 
@@ -108,18 +100,16 @@ For `?include=` parameters, the controller also checks `viewAny` permission on e
 
 ### 7. Organization Scoping
 
-When an organization is present in the request context (set by middleware in the `tenant` route group), the controller applies organization filtering to the query. Non-tenant route groups skip this step. The scoping strategy follows this order of precedence:
+When an organization is present in the request context (set by middleware in the `tenant` route group) and the registration has `belongsToOrganization: true`, the controller applies organization filtering to the query. Non-tenant route groups skip this step. The scoping strategy follows this order of precedence:
 
 1. **Resource IS the Organization model** -- restrict to the current org's primary key
-2. **Model has `scopeForOrganization` static method** -- delegate to it
-3. **Model has `organization_id` column** -- simple `WHERE organization_id = ?`
-4. **Auto-detected `belongsTo` chain** -- Rhino walks `belongsTo` relationships to find a model with `organization_id`
-5. **Model has `organization` relationship** -- use `whereHas`
-6. **No relationship found** -- model is global (no scope applied)
+2. **Model has an `organizationId` column** -- simple `WHERE organizationId = ?`
+3. **`owner` chain is configured / auto-detected** -- Rhino walks the foreign-key relation(s) named by `owner` to find a model with `organizationId` and filters via a nested relation condition
+4. **No relationship found** -- model is global (no scope applied)
 
 ### 8. Validation
 
-For `store` and `update` actions, the controller resolves permitted fields from the policy (`permittedAttributesForCreate` or `permittedAttributesForUpdate`), checks for forbidden fields (returns 403), then calls the model's `validateForAction()` method (provided by the `HasValidation` mixin) for VineJS format validation. If validation fails, a 422 response is returned with the error details:
+For `store` and `update` actions, the controller resolves permitted fields from the policy (`permittedAttributesForCreate` or `permittedAttributesForUpdate`), checks for forbidden fields (returns 403), then runs Zod validation against the registration's schema (`validation` / `validationStore` / `validationUpdate`). If validation fails, a 422 response is returned with the error details:
 
 ```json title="Response"
 {
@@ -132,14 +122,14 @@ For `store` and `update` actions, the controller resolves permitted fields from 
 
 ### 9. Query Execution
 
-The `RhinoQueryBuilder` translates URL query parameters into Prisma operations:
+The `QueryBuilderService` translates URL query parameters into Prisma operations:
 
-1. `applyFilters()` -- `?filter[status]=published`
-2. `applySorts()` -- `?sort=-created_at,title`
-3. `applySearch()` -- `?search=nestjs`
-4. `applyIncludes()` -- `?include=user,comments`
-5. `applyFields()` -- `?fields[posts]=id,title`
-6. `applyPagination()` -- `?page=1&per_page=20`
+1. Filters -- `?filter[status]=published`
+2. Sorts -- `?sort=-createdAt,title`
+3. Search -- `?search=nestjs`
+4. Includes -- `?include=author,comments`
+5. Field selection -- `?fields[posts]=id,title`
+6. Pagination -- `?page=1&per_page=20`
 
 ### 10. Response
 
@@ -158,11 +148,12 @@ The response body contains the data array (for index endpoints) or a single obje
 
 Models can opt out of specific routes using `exceptActions`:
 
-```ts title="app/models/setting.ts"
-export default class Setting extends compose(BaseModel, HasRhino) {
+```ts title="src/rhino.config.ts"
+settings: {
+  model: 'setting',
   // Only allow index and show -- no create, update, or delete
-  static exceptActions = ['store', 'update', 'destroy', 'trashed', 'restore', 'forceDelete']
-}
+  exceptActions: ['store', 'update', 'destroy', 'trashed', 'restore', 'forceDelete'],
+},
 ```
 
 Valid action names: `index`, `show`, `store`, `update`, `destroy`, `trashed`, `restore`, `forceDelete`.

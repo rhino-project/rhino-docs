@@ -5,58 +5,53 @@ title: Postman Export
 
 # Postman Export
 
-Rhino includes an Ace command that generates a complete Postman Collection v2.1 JSON file for all registered models. The collection includes authentication routes, per-model CRUD folders with filter, sort, search, include, and field examples, and soft-delete actions.
+Rhino includes a CLI command that generates a complete Postman Collection v2.1 JSON file for all registered models. The collection includes authentication routes, per-model CRUD folders with filter, sort, search, include, and field examples, and soft-delete actions.
 
 ## Usage
 
 ```bash title="terminal"
-npx rhino rhino:export-postman
+npx rhino export-postman
 ```
 
-This starts the NestJS application, introspects all registered models from `src/rhino.config.ts`, and writes a `postman_collection.json` file.
+This introspects all registered models from `src/rhino.config.ts` and writes a `postman_collection.json` file.
 
 ### Command Flags
 
-| Flag | Alias | Default | Description |
-|------|-------|---------|-------------|
-| `--output` | | `postman_collection.json` | Output file path |
-| `--base-url` | `-b` | `http://localhost:3333/api` | Base URL for requests |
-| `--project-name` | `-p` | Config value or `'Rhino API'` | Collection name |
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--output` | `postman_collection.json` | Output file path |
+| `--base-url` | `http://localhost:3000/api` | Base URL for requests |
 
 ### Examples
 
 ```bash title="terminal"
 # Default output
-npx rhino rhino:export-postman
+npx rhino export-postman
 
 # Custom output path and base URL
-npx rhino rhino:export-postman --output api-collection.json --base-url https://api.example.com
-
-# Custom collection name
-npx rhino rhino:export-postman -p "My Project API"
+npx rhino export-postman --output=api-collection.json --base-url=https://api.example.com/api
 ```
 
 ## Configuration
 
-The Postman export reads default values from `src/rhino.config.ts`:
+The optional `postman` block in `src/rhino.config.ts` lets you point the exporter at non-default model names used to enumerate roles and permissions:
 
 ```ts title="src/rhino.config.ts"
-import { RhinoModule } from "@rhino-dev/rhino-nestjs";  // wire via RhinoModule.forRoot() in your AppModule
-
-RhinoModule.forRoot({
-  postman: {
-    baseUrl: '{{baseUrl}}/api',
-    collectionName: 'Rhino API',
-  },
-})
+// Inside the RhinoConfig object passed to RhinoModule.forRoot()
+postman: {
+  roleModel: 'role',
+  userRoleModel: 'userRole',
+  userModel: 'user',
+},
 ```
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `baseUrl` | `string` | `'{{baseUrl}}/api'` | The base URL used in generated requests. Supports Postman variables like `{{baseUrl}}`. |
-| `collectionName` | `string` | `'Rhino API'` | The name of the generated Postman collection. |
+| Option | Type | Description |
+|--------|------|-------------|
+| `roleModel` | `string` | Prisma model used to enumerate roles. |
+| `userRoleModel` | `string` | Prisma model for user-role memberships. |
+| `userModel` | `string` | Prisma model for users. |
 
-Command-line flags override config values when provided.
+The base URL and output path are controlled by the command-line flags above.
 
 ## Generated Collection Structure
 
@@ -86,7 +81,7 @@ A top-level `Authentication` folder containing:
 
 ### Per-Model Folders
 
-Each registered model gets its own folder with sub-folders for each action. The command introspects the model's static properties (`allowedFilters`, `allowedSorts`, `allowedIncludes`, `allowedFields`, `allowedSearch`, `validationSchema`, `exceptActions`, `softDeletes`) to generate accurate example requests.
+Each registered model gets its own folder with sub-folders for each action. The command introspects the registration's fields (`allowedFilters`, `allowedSorts`, `allowedIncludes`, `allowedFields`, `allowedSearch`, `validation`/`validationStore`, `exceptActions`, `softDeletes`) to generate accurate example requests.
 
 **Index sub-folder:**
 - List all
@@ -121,14 +116,14 @@ Each registered model gets its own folder with sub-folders for each action. The 
 
 ### Example Request Bodies
 
-The command generates example request bodies from the model's `validationSchema` property. Field values are inferred from the schema types:
+The command generates example request bodies from the registration's Zod schema. Field values are inferred from the schema types:
 
 | Schema Type | Example Value |
 |------|--------------|
-| `vine.boolean()` | `true` |
-| `vine.number()` | `1` |
-| `vine.string().maxLength(N)` | String of `min(10, N)` characters |
-| `vine.string()` | `"Example fieldName"` |
+| `z.boolean()` | `true` |
+| `z.number()` | `1` |
+| `z.string().max(N)` | String of `min(10, N)` characters |
+| `z.string()` | `"Example fieldName"` |
 
 ### Multi-Tenant Support
 
@@ -143,7 +138,7 @@ The `organization` collection variable is included automatically.
 
 ## Importing the Collection
 
-1. Run `npx rhino rhino:export-postman`
+1. Run `npx rhino export-postman`
 2. Open Postman
 3. Click **Import** and select the generated `postman_collection.json`
 4. Update the `baseUrl` variable to match your environment
