@@ -27,7 +27,18 @@ configureApi({
 | Option | Type | Description |
 |--------|------|-------------|
 | `baseURL` | `string` | API base URL (default: `/api`) |
-| `onUnauthorized` | `() => void` | Callback on 401 responses |
+| `onUnauthorized` | `() => void` | Callback on 401 responses (token is cleared first) |
+| `onForbidden` | `(error) => void` | Callback on 403 responses (group membership denied). The token is **not** cleared. See [Group-Aware Auth](./authentication.md#group-aware-auth). |
+| `routeGroup` | `string \| null` | Route group used to build group-aware auth URLs (`/{routeGroup}/auth/*`). Pass `null` to clear it. Prefix-based groups only — domain-based groups need no `routeGroup`. |
+
+```tsx title="src/config.ts"
+// Group-aware auth: scope auth URLs to a prefix-based route group
+configureApi({
+  baseURL: '/api',
+  routeGroup: 'driver',
+  onForbidden: (error) => toast(error.response?.data?.message),
+});
+```
 
 :::tip React Native
 Use `onUnauthorized` to navigate to your login screen instead of the default `window.location` redirect:
@@ -95,6 +106,7 @@ storage.removeItem('theme');
 |-----|-------------|
 | `token` | API authentication token |
 | `organization_slug` | Current organization slug |
+| `route_group` | Active [route group](./authentication.md#group-aware-auth) (set on a group-aware login, cleared on logout) |
 
 ## events
 

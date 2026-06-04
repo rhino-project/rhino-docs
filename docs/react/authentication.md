@@ -15,7 +15,7 @@ Rhino provides a complete authentication and organization management flow for Re
 The primary hook for authentication state and actions. It reads the API token from `localStorage`, exposes login/logout functions, and manages the active organization.
 
 ```tsx title="src/hooks/useAuth.ts"
-const { token, isAuthenticated, login, logout, setOrganization } = useAuth();
+const { token, isAuthenticated, login, logout, setOrganization, setRouteGroup } = useAuth();
 ```
 
 ### Return Values
@@ -24,9 +24,10 @@ const { token, isAuthenticated, login, logout, setOrganization } = useAuth();
 |---|---|---|
 | `token` | `string \| null` | Current API token stored in `localStorage`. `null` when not authenticated. |
 | `isAuthenticated` | `boolean` | `true` if a token exists, `false` otherwise. |
-| `login(email, password)` | `(email: string, password: string) => Promise<LoginResult>` | Authenticates the user and stores the returned token. |
-| `logout()` | `() => void` | Clears the token from storage and redirects to the home page. |
+| `login(email, password, options?)` | `(email: string, password: string, options?: { routeGroup?: string \| null }) => Promise<LoginResult>` | Authenticates the user and stores the returned token. Accepts an optional per-call `routeGroup` (see [Group-Aware Auth](#group-aware-auth)). |
+| `logout(options?)` | `(options?: { routeGroup?: string \| null }) => void` | Clears the token (and persisted organization/route group) from storage and redirects to the home page. |
 | `setOrganization(slug)` | `(slug: string) => void` | Persists the given organization slug in `localStorage` for subsequent API requests. |
+| `setRouteGroup(group)` | `(group: string \| null) => void` | Persists (or clears, when falsy) the active route group and notifies listeners. See [Group-Aware Auth](#group-aware-auth). |
 
 ### LoginResult Type
 
@@ -38,6 +39,7 @@ interface LoginResult {
   user?: any;
   organization?: { slug: string };
   organization_slug?: string;
+  route_group?: string | null;
   error?: string;
 }
 ```
@@ -46,6 +48,7 @@ interface LoginResult {
 - **`user`** -- The authenticated user object (when successful).
 - **`organization`** -- The user's default organization object, including its `slug`.
 - **`organization_slug`** -- Shorthand for the organization slug (convenience field).
+- **`route_group`** -- The route group this login resolved to (the value the backend echoes back, or the group you logged in with). `null` for the default/global auth path. See [Group-Aware Auth](#group-aware-auth).
 - **`error`** -- An error message string when `success` is `false`.
 
 ### Auth Flow
@@ -226,6 +229,142 @@ function LogoutButton() {
 
 :::tip
 `logout()` clears the token **and** redirects to the home page (`/`). If you need custom redirect behavior, clear the token manually and handle navigation yourself.
+:::
+
+---
+
+## Group-Aware Auth
+
+A Rhino backend can register the auth route set per **route group** (see the
+server's [Route Groups](../server/route-groups.md) docs). The client mirrors
+this: tell it which group is signing in and it builds **group-scoped** auth URLs.
+
+- A **prefix-based** group exposes its auth under `/{group}/auth/*` — e.g.
+  `routeGroup: 'driver'` makes `login` hit `POST /api/driver/auth/login`.
+- With no `routeGroup`, every auth URL is byte-for-byte the legacy `/auth/*`
+  path. The feature is fully opt-in and backward compatible.
+
+:::info Domain-based groups need no `routeGroup`
+A **domain-based** group serves the plain `/api/auth/*` set on its own host, so
+the host already scopes it — you do **not** set `routeGroup` for domain/subdomain
+groups. `routeGroup` is only for **prefix-based** groups.
+:::
+
+### Configuring the group
+
+There are two equivalent ways to register a route group with the client.
+
+```tsx title="src/main.tsx"
+import { configureApi, AuthProvider } from '@rhino-dev/rhino-react';
+
+// Option A — configure the API client once at startup
+configureApi({
+  baseURL: '/api',
+  routeGroup: 'driver',     // auth URLs become /api/driver/auth/*
+  onForbidden: (error) => { // see "Handling 403" below
+    console.warn(error.response?.data?.message);
+  },
+});
+
+// Option B — pass it to the provider (it registers the group with the client)
+<AuthProvider routeGroup="driver">{children}</AuthProvider>;
+```
+
+`configureApi` accepts (in addition to `baseURL` / `onUnauthorized`):
+
+| Option | Type | Description |
+|---|---|---|
+| `routeGroup` | `string \| null` | Route group used to build group-aware auth URLs. When set, auth paths become `/{routeGroup}/auth/*`; pass `null` to clear a previously configured group. |
+| `onForbidden` | `(error) => void` | Callback fired on a **403** response (authenticated but not a member of the group). The token is **not** cleared. |
+
+### login / logout with a per-call group
+
+`login` and `logout` accept a per-call `routeGroup` that overrides the configured
+one. The resolved group is persisted under the `route_group` storage key (cleared
+on logout) and exposed via [`useRouteGroup()`](#useroutegroup).
+
+```tsx
+const { login, logout } = useAuth();
+
+// POST /api/admin/auth/login — overrides the provider/configured group
+const result = await login(email, password, { routeGroup: 'admin' });
+result.route_group; // 'admin'
+
+await logout(); // also clears the persisted route group
+```
+
+### useRouteGroup()
+
+Returns the active route group from storage. It mirrors
+[`useOrganization()`](#useorganization) and stays in sync across tabs on web
+(and in-memory on React Native).
+
+```tsx
+import { useRouteGroup } from '@rhino-dev/rhino-react';
+
+const routeGroup = useRouteGroup(); // 'admin' after a group-aware login, else null
+```
+
+The group is persisted on a group-aware `login` (and by `useRegister` /
+`useAcceptInvitation` when the backend echoes a `route_group`), and cleared on
+`logout`.
+
+### Handling 403 vs 401
+
+The two responses mean different things and are handled differently:
+
+| Status | Meaning | Client behavior |
+|---|---|---|
+| **401 Unauthorized** | Missing/expired token | Token is **cleared**; `onUnauthorized` runs (default: redirect to `/`). |
+| **403 Forbidden** | Authenticated, but **not a member** of the requested route group (membership denial, when the backend has `enforce_group_membership` on) | Token is **kept**; `onForbidden(error)` runs so you can surface the denial without logging the user out. |
+
+```tsx
+configureApi({
+  onForbidden: (error) => {
+    // The user is logged in but cannot enter this group — show a message,
+    // not a logout.
+    toast(error.response?.data?.message ?? 'You do not have access to this area.');
+  },
+});
+```
+
+### Group-aware action hooks
+
+Three mutation hooks complete the group-aware auth flow. Each respects the
+configured `routeGroup` and accepts a per-call `routeGroup` override; the URLs
+are built the same way as `login` (`/{group}/auth/*`, or `/auth/*` by default).
+
+| Hook | Request | Payload |
+|---|---|---|
+| `useRegister()` | `POST {authBase}/auth/register` | `{ token, name, email, password, password_confirmation, routeGroup? }` |
+| `usePasswordRecover()` | `POST {authBase}/auth/password/recover` | `{ email, routeGroup? }` |
+| `useResetPassword()` | `POST {authBase}/auth/password/reset` | `{ token, email, password, password_confirmation, routeGroup? }` |
+
+```tsx
+import { useRegister, usePasswordRecover, useResetPassword } from '@rhino-dev/rhino-react';
+
+const register = useRegister();
+await register.mutateAsync({ token, name, email, password, password_confirmation });
+
+const recover = usePasswordRecover();
+await recover.mutateAsync({ email });
+
+const reset = useResetPassword();
+await reset.mutateAsync({ token, email, password, password_confirmation });
+```
+
+`useRegister` persists the `route_group` the backend echoes back (like a
+group-aware `login`), so `useRouteGroup()` is populated after an
+invitation-accept registration.
+
+:::warning Data hooks assume a path-prefix organization
+The CRUD/query hooks (`useModelIndex`, `useModelShow`, …) build their URLs as
+`/api/{organization}/{model}` from [`useOrganization()`](#useorganization). That
+is correct for **path-prefix** multi-tenancy. For **subdomain/domain-based**
+organizations the org comes from the host, so you should **not** call
+`setOrganization` — leave it unset and let the host scope the data (requests stay
+`/api/{model}`). Setting an org slug there would produce an incorrect
+`/api/{slug}/{model}` URL. `routeGroup` affects only auth URLs, never data URLs.
 :::
 
 ---

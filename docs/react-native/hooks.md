@@ -102,6 +102,29 @@ function ProfileScreen() {
 }
 ```
 
+### Group-Aware Auth
+
+The auth hooks are identical to the web client, including the group-aware flow:
+`configureApi({ routeGroup, onForbidden })`, the per-call
+`login(email, password, { routeGroup })` override, `useRouteGroup()`, and the
+`useRegister` / `usePasswordRecover` / `useResetPassword` hooks. On native the
+route group is kept in sync in-memory rather than across tabs. See the web
+[Authentication → Group-Aware Auth](../react/authentication.md#group-aware-auth)
+page for the full reference.
+
+On native, pass `onUnauthorized` (401, clears token) and `onForbidden` (403,
+membership denied, keeps token) to drive navigation instead of the web's default
+`window.location` redirect:
+
+```tsx title="src/lib/rhino-rn.ts"
+configureApi({
+  baseURL: 'https://api.example.com/api',
+  routeGroup: 'driver',
+  onUnauthorized: () => navigation.navigate('Login'),
+  onForbidden: (error) => showMembershipDenied(error),
+});
+```
+
 ## Differences from Web
 
 | Aspect | Web | React Native |

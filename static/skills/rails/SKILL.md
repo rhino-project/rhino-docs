@@ -1099,11 +1099,11 @@ config.auth = { enforce_group_membership: false } # default OFF
 ```
 
 - **Off:** no membership check; permission source is the org-presence heuristic.
-- **On:** after auth, the user must have a `user_roles` row matching the request's `route_group` (nil row = wildcard) **and**, for tenant groups, the resolved org — else **403**. Permissions then resolve from the matched row (exact-group row preferred over nil wildcard), not the heuristic. `:public` skips both.
+- **On:** after auth, the user must have a `user_roles` row matching the request's `route_group` (nil row = wildcard) **and**, for tenant groups, the resolved org — else **403**. Permissions then resolve from the matched row (exact-group row preferred over nil wildcard), not the heuristic. `:public` skips both. **The 403 membership denial takes precedence over the org-resolution 404**: an authenticated non-member of a (real) route group/org gets 403, not 404. With enforcement off, the 404 info-hiding for unknown/non-member orgs is unchanged; a genuinely unknown org still 404s either way.
 
 Membership is the coarse gate (may you enter); permissions are the fine check (what may you do). They run in sequence, never merged.
 
-**2. Group-aware auth.** `auth: true` registers the full auth set (`login`, `logout`, `password/recover`, `password/reset`, `register`) under the group's prefix/domain, tagged with its `route_group`. The legacy unprefixed `/api/auth/*` always remains for the default/no-group case. `:public` is never auth-enabled.
+**2. Group-aware auth.** `auth: true` registers the full auth set (`login`, `logout`, `password/recover`, `password/reset`, `register`) under the group's prefix/domain, tagged with its `route_group`. The legacy unprefixed `/api/auth/*` always remains for the default/no-group case. `:public` is never auth-enabled. An `auth: true` group with **empty prefix + no domain IS the default auth** — the legacy `/api/auth/*` adopts that group's `route_group`/`hooks:` (no second route drawn). **Two+** indistinguishable empty-prefix + no-domain auth groups → boot-time `Rhino::RouteGroupConflictError`.
 
 ```ruby
 config.route_group :driver, prefix: 'driver', auth: true, models: [:trips]

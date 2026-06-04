@@ -187,6 +187,19 @@ knows which group is signing in.
 - The resolved `route_group` flows into membership checks and lifecycle hooks.
 - `public` is never auth-enabled.
 
+:::info An empty-prefix, no-domain auth group **is** the default auth
+A group with `'auth' => true`, an **empty prefix**, and **no domain** has nothing
+to distinguish its auth routes from the legacy `/api/auth/*` set — so Rhino treats
+it *as* the default/legacy auth. The unprefixed `/api/auth/*` routes adopt that
+group's `route_group` (and its `hooks`); no second, colliding route is registered.
+Groups with a distinguishing prefix or domain keep their own per-group auth routes,
+and apps with no auth-enabled group keep today's group-less legacy auth unchanged.
+
+If **two or more** auth-enabled groups have an empty prefix **and** no domain,
+they are genuinely indistinguishable, and Rhino raises a boot-time
+`RouteGroupConflictException`. Give each a distinct `'prefix'` or `'domain'`.
+:::
+
 ### Lifecycle hooks
 
 A group may declare an optional `'hooks'` class implementing

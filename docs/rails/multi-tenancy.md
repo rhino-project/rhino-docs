@@ -263,7 +263,16 @@ curl -H "Authorization: Bearer TOKEN" /api/other-org/posts
 ```
 
 :::info Why 404 and not 403?
-Returning 404 instead of 403 prevents leaking information about organization existence. Users can't discover which organization slugs are valid.
+With `enforce_group_membership` **off** (the default), returning 404 instead of
+403 prevents leaking information about organization existence — users can't
+discover which organization slugs are valid. A genuinely unknown org always 404s.
+
+When `enforce_group_membership` is **on**, this changes for an authenticated
+**non-member** of the requested route group: the membership gate runs *before*
+the org-resolution 404 and returns **403** (membership denial takes precedence
+over the org 404). The gate resolves the org itself as needed, so a real org you
+simply aren't a member of yields 403, while a genuinely non-existent org still
+404s. See [Route Groups → Group membership & auth](./route-groups.md#group-membership--auth).
 :::
 
 ### No Authentication

@@ -74,6 +74,24 @@ invite.mutate(
 
 **API Request:** `POST /api/{organization}/invitations`
 
+### Inviting into a route group
+
+When the backend treats route groups as access boundaries (group-aware auth),
+an invitation can record which group the invitee joins. Pass an optional
+`route_group` in the payload — it is only included in the request when provided,
+so existing calls are unaffected.
+
+```tsx
+const invite = useInviteUser();
+
+// Invite a driver — the accepted membership is scoped to the 'driver' group
+invite.mutate({ email: 'driver@example.com', role_id: 2, route_group: 'driver' });
+```
+
+See the server's [Route Groups → Invitations carry the group](../server/route-groups.md#invitations-carry-the-group)
+for the backend behavior (membership population, `afterRegister` hook, and the
+inviter-must-be-a-member rule when enforcement is on).
+
 :::info Duplicate Prevention
 The server prevents sending duplicate invitations. If a pending invitation already exists for the email, or if the user is already a member of the organization, the request will return a validation error.
 :::
@@ -136,6 +154,18 @@ accept.mutate(token, {
 ```
 
 **API Request:** `POST /api/invitations/accept` with `{ token: '...' }`
+
+`mutate` accepts either a bare token string (back-compat) **or** an object that
+also carries the group: `{ token, route_group }`. When the backend reports the
+joined group in its response, the client persists it to the `route_group`
+storage key so [`useRouteGroup()`](./authentication.md#useroutegroup) reflects it.
+
+```tsx
+const accept = useAcceptInvitation();
+
+accept.mutate(token);                          // bare token (default group)
+accept.mutate({ token, route_group: 'driver' }); // join a specific group
+```
 
 ## Complete Invitation Manager
 

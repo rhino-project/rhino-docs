@@ -27,7 +27,8 @@ Rhino auto-generates a complete REST API from your model definitions. Here is ev
 | 13 | **Eager Loading (Includes)** | `?include=user,comments` with nested support (`comments.user`). Count (`commentsCount`) and existence (`commentsExists`) suffixes. Authorization checked per include. |
 | 14 | **Multi-Tenancy** | Organization-based data isolation via `BelongsToOrganization` mixin. Auto-sets `organizationId`, global scope filters queries. Route-prefix or subdomain resolution. |
 | 15 | **Nested Ownership Auto-Detection** | Models without direct `organizationId` are scoped by walking `belongsTo` chains (e.g., Comment → Post → Blog → Organization). |
-| 16 | **Route Groups** | Multiple URL prefixes with different middleware/auth per group. Reserved names: `tenant` (org-scoped + invitations) and `public` (no auth). |
+| 16 | **Route Groups** | Multiple URL prefixes with different middleware/auth per group, optionally constrained to a host via per-group `domain` (literal or `{organization}.example.com` for subdomain multitenancy). Reserved names: `tenant` (org-scoped + invitations) and `public` (no auth). Opt-in per-group `auth` (group-tagged auth route set) and `hooks` (lifecycle hooks). |
+| 16b | **Group Membership & Auth** (opt-in via `auth.enforceGroupMembership`) | `user_roles.route_group` column (NULL/absent = wildcard) makes the group an access boundary: membership mismatch → 403, permissions resolve from the matched row. Per-group `auth: true` registers group-tagged auth routes; per-group `hooks` provider runs `afterLogin/Logout/Register/PasswordRecover/PasswordReset` and may reject (revokes token). Invitations carry `route_group`. |
 | 17 | **Soft Deletes** | `DELETE` soft-deletes, plus `GET /trashed`, `PATCH /restore`, `DELETE /force-delete` endpoints. Each with its own permission. |
 | 18 | **Audit Trail** | `HasAuditTrail` mixin logs all CRUD events with old/new values, user, IP, user-agent, and organization context. Fail-safe (errors never break CRUD). |
 | 19 | **Nested Operations** | `POST /nested` for atomic multi-model transactions. Create and update in batches. All-or-nothing rollback. |
@@ -1123,6 +1124,68 @@ Literal prefixes (e.g., `admin`, `public`) register **before** parameterized pre
 |-------------|------------------|
 | `'tenant'` | `userRoles.permissions` (org-scoped) |
 | Any other | `users.permissions` (user-level) |
+
+### Domain Constraints
+
+Per-group `domain` constrains a group to a host, so two groups can share a `prefix`:
+
+```ts
+routeGroups: {
+  admin: { prefix: '', domain: 'admin.example.com', models: '*' },
+}
+```
+
+- omitted → matches any host (default, backward compatible)
+- `'admin.example.com'` → only that exact host; others 404
+- `'{organization}.example.com'` → parameterized; captured `{organization}` feeds org resolution (subdomain multitenancy, no extra wiring)
+
+### Group Membership & Auth (opt-in)
+
+All opt-in and fully backward compatible — **with the flags off, behavior is byte-for-byte unchanged.**
+
+**1. Membership on `user_roles`.** A migration adds a nullable `route_group` column (and makes `organizationId` nullable for non-tenant groups). A `NULL`/absent `route_group` is a **wildcard** (member of every group — the back-compat default); a concrete value scopes the membership. Gated by the master flag:
+
+```ts
+RhinoModule.forRoot({ auth: { enforceGroupMembership: false } }) // default OFF
+```
+
+- **Off:** no membership check; permission source is the org-presence heuristic.
+- **On:** after auth, the user must have a `user_roles` row matching the request's `route_group` (NULL/absent row = wildcard) **and**, for tenant groups, the resolved org — else **403**. Permissions then resolve from the matched row, not the heuristic. `public` skips both. The default/empty-prefix group is a first-class membership dimension (enforcement applies to it uniformly). **The 403 membership denial takes precedence over the org-resolution 404**: an authenticated non-member of a (real) route group/org gets 403, not 404. With enforcement off, unknown/non-member orgs 404 as before.
+
+Per-group `tenant?: boolean` controls org-scoping: omitted → tenant iff multi-tenancy enabled; set `tenant: false` for org-less groups (`admin`, `driver`) when multi-tenancy is on.
+
+**2. Group-aware auth.** `auth: true` registers the full auth set (`login`, `logout`, `password/recover`, `password/reset`, `register`) under the group's prefix/domain, tagged with its name. The legacy unprefixed `/api/auth/*` always remains for the default/no-group case. `public` is never auth-enabled. An `auth: true` group with **empty prefix + no domain IS the default auth** — the default `/api/auth/*` resolves to that group (keeping `skipAuth`) and adopts its `hooks`, even when a host-claiming empty-prefix domain group also exists (no second route registered). **Two+** indistinguishable empty-prefix + no-domain auth groups → boot-time `RouteGroupConflictError`.
+
+```ts
+routeGroups: {
+  driver: { prefix: 'driver', auth: true, hooks: DriverAuthHooks, tenant: false, models: ['trips'] },
+}
+// adds POST /api/driver/auth/login, …/logout, …/register, …/password/*
+```
+
+**3. Lifecycle hooks.** A group's `hooks` provider implements `AuthLifecycleHooks` (class via Nest DI, or plain object). Each method runs **after** its action succeeds, receiving `AuthHookContext` (`{ user, routeGroup, organization?, token?, request }`):
+
+```ts
+@Injectable()
+export class DriverAuthHooks implements AuthLifecycleHooks {
+  async afterLogin(ctx: AuthHookContext): Promise<void> {
+    if (!ctx.user.driver?.active)
+      throw new RhinoAuthRejected(403, 'Driver suspended.'); // revokes token, returns 403
+  }
+}
+```
+
+| Event | Fires after | Reject? |
+|-------|-------------|---------|
+| `afterLogin` | login (token issued) | yes — revokes token |
+| `afterRegister` | invitation-accept registration | yes — revokes token |
+| `afterLogout` | logout | yes (token already gone) |
+| `afterPasswordReset` | password reset | yes |
+| `afterPasswordRecover` | recovery email requested | runs, but reject is **swallowed** (anti-enumeration) |
+
+Reject by throwing `RhinoAuthRejected(status = 403, message)` (or any `HttpException`; a plain `Error` → 500 after revoke). Default 403. **Token revocation needs a `RevokedToken` Prisma model** (`token`, `createdAt`) + short-TTL JWTs (`auth.jwtExpiresIn`); without it, revocation is logged and skipped (the token is still dropped from the response).
+
+**4. Invitations carry the group.** Invite stores `route_group` (NULL org for non-tenant groups); accept populates the membership then fires `afterRegister`. Cannot invite into `public`; a forged/unknown `routeGroup` (not configured, not `public`) → **422** regardless of enforcement. With enforcement on, a coarse membership gate runs first (inviter must be a member of the target group — **403** on denial, NULL row = wildcard), then the normal permission check.
 
 ---
 

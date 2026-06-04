@@ -231,3 +231,42 @@ Both middleware classes verify that the authenticated user belongs to the resolv
 3. **Explicit helper method** -- calls `user.belongsToOrganization(org)` if defined
 
 If none of these strategies find a match, the middleware denies access.
+
+## Group Membership Enforcement
+
+By default, belonging to an organization is what grants access; a route group is
+not itself an access boundary. You can opt into treating group membership as a
+first-class gate with the master flag on `auth`:
+
+```ts title="src/rhino.config.ts"
+RhinoModule.forRoot({
+  auth: { enforceGroupMembership: false }, // default OFF — behavior unchanged
+  // ...
+})
+```
+
+When the flag is **on**, after authentication an additional **coarse** check
+runs before permissions: the user must hold a `user_roles` row whose
+`route_group` matches the request's group (a `NULL`/absent `route_group` row is a
+**wildcard** that matches every group) **and**, for tenant groups, the resolved
+organization. No matching row → **403**. Permissions then resolve from that
+matching membership row (per `(group, org)`) instead of the org-presence
+heuristic.
+
+This pairs with the per-group `auth`/`hooks` keys and invitation `route_group`
+described in [Route Groups → Group membership & auth](./route-groups.md#group-membership--auth).
+With the flag off, none of this applies and multi-tenancy behaves exactly as
+documented above.
+
+:::info Why 404 and not 403?
+With `enforceGroupMembership` **off** (the default), an authenticated user who
+hits an organization they don't belong to gets a **404** — this prevents leaking
+which organization slugs exist. A genuinely unknown org always 404s.
+
+When `enforceGroupMembership` is **on**, this changes for an authenticated
+**non-member** of the requested route group: the membership gate runs *before*
+the org-resolution 404 and returns **403** (membership denial takes precedence
+over the org 404). The gate resolves the org itself as needed, so a real org you
+simply aren't a member of yields 403, while a genuinely non-existent org still
+404s.
+:::
