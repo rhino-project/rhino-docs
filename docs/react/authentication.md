@@ -357,14 +357,19 @@ await reset.mutateAsync({ token, email, password, password_confirmation });
 group-aware `login`), so `useRouteGroup()` is populated after an
 invitation-accept registration.
 
-:::warning Data hooks assume a path-prefix organization
-The CRUD/query hooks (`useModelIndex`, `useModelShow`, …) build their URLs as
-`/api/{organization}/{model}` from [`useOrganization()`](#useorganization). That
-is correct for **path-prefix** multi-tenancy. For **subdomain/domain-based**
-organizations the org comes from the host, so you should **not** call
-`setOrganization` — leave it unset and let the host scope the data (requests stay
-`/api/{model}`). Setting an org slug there would produce an incorrect
-`/api/{slug}/{model}` URL. `routeGroup` affects only auth URLs, never data URLs.
+:::tip Path-prefix vs. subdomain multi-tenancy (`tenancy`)
+The CRUD/query hooks (`useModelIndex`, `useModelShow`, …) build org-scoped URLs
+according to the `tenancy` option, set via `configureApi({ tenancy })` or
+`<AuthProvider tenancy="…">`:
+
+- **`tenancy: 'path'`** (default) — path-prefix multi-tenancy. With an org set via
+  [`setOrganization()`](#useorganization), hooks build `/api/{organization}/{model}`.
+- **`tenancy: 'subdomain'`** — domain/subdomain-based groups (e.g.
+  `{organization}.agency.example.com`). The org is carried by the **host**, so the
+  hooks build `/api/{model}` with no org segment. You may still `setOrganization`
+  for display/filtering — it just isn't prepended to the path.
+
+`routeGroup` affects only auth URLs, never data URLs.
 :::
 
 ---
