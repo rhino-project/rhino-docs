@@ -90,6 +90,7 @@ const sidebars: SidebarsConfig = {
         'react/invitations',
         'react/utilities',
         'react/typescript',
+        'react/desktop-electron',
       ],
     },
   ],
