@@ -464,3 +464,84 @@ If the user is not authenticated at all and the route requires authentication, L
 ```
 
 **HTTP status:** `401 Unauthorized`
+
+---
+
+## Layered Permissions
+
+By default Rhino resolves a user's effective permissions from **three layers**, so you don't have to copy a full permission set onto every user.
+
+```
+effective = (role ∪ granted) − denied        // deny always wins
+```
+
+| Layer | Where it lives | Purpose |
+|-------|----------------|---------|
+| **role** | `org_role_permissions(organization_id, role_id, permissions)` | The shared set every user with that role in that org inherits. Defined **once** per (org, role). |
+| **granted** | `user_roles.granted_permissions` | Extra abilities for one user (additive). |
+| **denied** | `user_roles.denied_permissions` | Abilities removed from one user (subtractive). **Deny wins over everything**, even a role `*`. |
+| **legacy** | `user_roles.permissions` | The pre-4.3 per-user list. Still honored as an allow layer, so existing apps keep working unchanged. |
+
+Wildcards (`*`, `posts.*`) work on every layer.
+
+### Why this exists
+
+Previously the only org-scoped source was `user_roles.permissions`, so teams stored the **full** permission set on every user. Adding a table meant updating every user row, and a one-off exception meant inventing a new role. With the role layer:
+
+- **Add a table** → grant `widgets.*` on the role layer once; every member inherits it.
+- **Give one user extra access** → add to their `granted_permissions`.
+- **Take one ability from one user** → add it to their `denied_permissions` — no new role needed.
+
+### Examples
+
+```php
+// Org-wide role layer: every "editor" in org 1 can manage posts and read comments.
+OrgRolePermission::create([
+    'organization_id' => 1,
+    'role_id' => $editorRole->id,
+    'permissions' => ['posts.*', 'comments.index'],
+]);
+
+// This editor also gets comment moderation, but cannot delete posts.
+UserRole::create([
+    'user_id' => $user->id,
+    'role_id' => $editorRole->id,
+    'organization_id' => 1,
+    'granted_permissions' => ['comments.destroy'],
+    'denied_permissions' => ['posts.destroy'],
+]);
+
+$user->hasPermission('posts.update', $org);    // true  (role layer)
+$user->hasPermission('comments.destroy', $org);// true  (granted)
+$user->hasPermission('posts.destroy', $org);   // false (denied wins)
+```
+
+Use `explainPermission()` to see which layer decided:
+
+```php
+$user->explainPermission('posts.destroy', $org);
+// ['granted' => false, 'reason' => 'denied']
+```
+
+### Resolution rules
+
+1. If the permission matches `denied_permissions` → **DENY** (deny always wins).
+2. Else if it matches `role ∪ granted ∪ legacy` → **ALLOW**.
+3. Else → **DENY** (default-deny).
+
+Deny is intentionally **deny-overrides**, not "most-specific-wins": a denied permission stays denied even under a role `*`.
+
+### Backward compatibility
+
+Layered permissions are fully backward-compatible. With `org_role_permissions` empty and the delta columns unset, resolution reduces to exactly the pre-4.3 behavior (legacy `user_roles.permissions`). The `rhino:install` command scaffolds the new table, model, and columns.
+
+### Migrating an existing app
+
+To lift your existing per-user permissions into the role layer, run:
+
+```bash
+php artisan rhino:permissions-migrate          # dry-run preview
+php artisan rhino:permissions-migrate --apply  # write the changes
+```
+
+For each `(organization, role)` group it computes the common subset of every user's permissions, writes it to `org_role_permissions`, and reduces each user row to just its delta (`granted_permissions`). Effective permissions are preserved exactly. It is idempotent and skips groups that already have a role layer.

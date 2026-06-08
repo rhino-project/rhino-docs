@@ -271,3 +271,80 @@ export class PostPolicy extends ResourcePolicy {
 :::tip
 Always set `resourceSlug` explicitly on your policy classes to avoid ambiguity and make permissions easy to audit.
 :::
+
+---
+
+## Layered Permissions
+
+By default Rhino resolves a user's effective permissions from **three layers**, so you don't have to copy a full permission set onto every user.
+
+```
+effective = (role ∪ granted) − denied        // deny always wins
+```
+
+| Layer | Where it lives | Purpose |
+|-------|----------------|---------|
+| **role** | `OrgRolePermission(organizationId, roleId, permissions)` | The shared set every user with that role in that org inherits. Defined **once** per (org, role). |
+| **granted** | `userRoles.grantedPermissions` | Extra abilities for one user (additive). |
+| **denied** | `userRoles.deniedPermissions` | Abilities removed from one user (subtractive). **Deny wins over everything**, even a role `*`. |
+| **legacy** | `userRoles.permissions` | The pre-4.3 per-user list, still honored as an allow layer. |
+
+Wildcards (`*`, `posts.*`) work on every layer.
+
+### Prisma schema
+
+Add the `OrgRolePermission` model, the `role.orgRolePermissions` relation, and the two delta columns on `UserRole`:
+
+```prisma
+model OrgRolePermission {
+  id             Int          @id @default(autoincrement())
+  organizationId Int
+  roleId         Int
+  permissions    Json         @default("[]")
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  role           Role         @relation(fields: [roleId], references: [id])
+
+  @@unique([organizationId, roleId])
+}
+
+model UserRole {
+  // ...existing fields...
+  permissions         Json @default("[]")
+  grantedPermissions  Json @default("[]")
+  deniedPermissions   Json @default("[]")
+}
+
+model Role {
+  // ...existing fields...
+  orgRolePermissions OrgRolePermission[]
+}
+```
+
+`JwtAuthGuard` eager-loads `role.orgRolePermissions` automatically, with a graceful fallback for apps that haven't added the relation yet — so existing apps keep working unchanged.
+
+### Why this exists
+
+Previously the only org-scoped source was `userRoles.permissions`, so teams stored the **full** set on every user, and a one-off exception meant inventing a new role. With the role layer:
+
+- **Add a table** → grant `widgets.*` on the role layer once; every member inherits it.
+- **Give one user extra access** → add to their `grantedPermissions`.
+- **Take one ability from one user** → add it to their `deniedPermissions` — no new role needed.
+
+### Resolution rules
+
+1. If the permission matches `deniedPermissions` → **DENY** (deny always wins).
+2. Else if it matches `role ∪ granted ∪ legacy` → **ALLOW**.
+3. Else → **DENY** (default-deny).
+
+Deny is intentionally **deny-overrides**, not "most-specific-wins": a denied permission stays denied even under a role `*`. `userHasPermission()` enforces this in one place; every guard goes through it.
+
+### Migrating an existing app
+
+To lift your existing per-user permissions into the role layer, run from your app root:
+
+```bash
+npx rhino permissions-migrate           # dry-run preview
+npx rhino permissions-migrate --apply   # write the changes
+```
+
+For each `(organization, role)` group it computes the common subset of every user's permissions, writes it to `OrgRolePermission`, and reduces each user row to just its delta. Effective permissions are preserved exactly. It is idempotent and skips groups that already have a role layer.

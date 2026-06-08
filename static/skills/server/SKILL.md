@@ -13,7 +13,7 @@ Rhino auto-generates a complete REST API from your model definitions. Here is ev
 | 1 | **Automatic CRUD Endpoints** | Generates `index`, `show`, `store`, `update`, `destroy` for every registered model — zero controller code needed. |
 | 2 | **Authentication** | Built-in login, logout, password recovery/reset, and invitation-based registration via Laravel Sanctum. |
 | 3 | **Authorization & Policies** | `ResourcePolicy` base class with convention-based permission checks (`{slug}.{action}`). Supports wildcards (`*`, `posts.*`). |
-| 4 | **Role-Based Access Control** | Permissions stored per-role per-organization. Roles assigned via `user_roles` pivot table. |
+| 4 | **Role-Based Access Control (layered)** | `effective = (role ∪ granted) − denied`, deny always wins. Role layer in `org_role_permissions(org, role)` (shared, defined once); per-user `user_roles.granted_permissions` / `denied_permissions` deltas; legacy `user_roles.permissions` still honored. Wildcards on every layer. `explainPermission()` reports the deciding layer. Backward-compatible. Migrate existing apps with `php artisan rhino:permissions-migrate`. |
 | 5 | **Attribute-Level Permissions** | Control which fields each role can read (`permittedAttributesForShow`, `hiddenAttributesForShow`) and write (`permittedAttributesForCreate`, `permittedAttributesForUpdate`). |
 | 6 | **Validation** | Dual-layer: format rules via `$validationRules` (type/length) + field presence via `$validationRulesStore`/`$validationRulesUpdate`. Supports role-keyed rules. |
 | 7 | **Cross-Tenant FK Validation** | `exists:` rules auto-scoped to current organization, even through indirect FK relationships. |

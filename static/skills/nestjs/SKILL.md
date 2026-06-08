@@ -22,7 +22,7 @@ In Rhino for NestJS:
 | 1 | **Automatic CRUD Endpoints** | Generates `index`, `show`, `store`, `update`, `destroy` for every registered model — zero controller code. |
 | 2 | **Authentication** | Built-in login, logout, password recovery/reset, and invitation-based registration via JWT. |
 | 3 | **Authorization & Policies** | `ResourcePolicy` base class with convention-based permission checks (`{slug}.{action}`). Wildcards (`*`, `posts.*`). |
-| 4 | **Role-Based Access Control** | Permissions per-role per-organization via the `user_roles` join table. |
+| 4 | **Role-Based Access Control (layered)** | `effective = (role ∪ granted) − denied`, deny always wins. Role layer in `OrgRolePermission(org, role)` (shared, defined once); per-user `userRoles.grantedPermissions` / `deniedPermissions` deltas; legacy `userRoles.permissions` still honored. Wildcards on every layer; `userHasPermission()` enforces deny-overrides in one place. `JwtAuthGuard` deep-includes `role.orgRolePermissions` with graceful fallback. Backward-compatible. Migrate with `npx rhino permissions-migrate --apply`. |
 | 5 | **Attribute-Level Permissions** | Control which fields each role can read (`permittedAttributesForShow`, `hiddenAttributesForShow`) and write (`permittedAttributesForCreate`, `permittedAttributesForUpdate`). |
 | 6 | **Validation** | Two-layer: policy-driven field permissions (403 for forbidden fields) + Zod schemas for type/format (422). Role-keyed schemas supported. |
 | 7 | **Cross-Tenant FK Validation** | Client-supplied `organizationId` is stripped; FK references can be verified against the current org via `fkConstraints`. |

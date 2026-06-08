@@ -15,7 +15,7 @@ Rhino auto-generates a complete REST API from your model definitions. Here is ev
 | 1 | **Automatic CRUD Endpoints** | Generates `index`, `show`, `store`, `update`, `destroy` for every registered model — zero controller code needed. |
 | 2 | **Authentication** | Built-in login, logout, password recovery/reset, and invitation-based registration via API token authentication. |
 | 3 | **Authorization & Policies** | `ResourcePolicy` base class (Pundit) with convention-based permission checks (`{slug}.{action}`). Supports wildcards (`*`, `posts.*`). |
-| 4 | **Role-Based Access Control** | Permissions stored per-role per-organization. Roles assigned via `user_roles` pivot table. |
+| 4 | **Role-Based Access Control (layered)** | `effective = (role ∪ granted) − denied`, deny always wins. Role layer in `org_role_permissions(org, role)` (shared, defined once); per-user `user_roles.granted_permissions` / `denied_permissions` deltas; legacy `user_roles.permissions` honored, and the global `roles.permissions` kept as a fallback. Wildcards on every layer. `explain_permission` reports the deciding layer. Backward-compatible. Migrate with `rake rhino:permissions_migrate APPLY=1`. |
 | 5 | **Attribute-Level Permissions** | Control which fields each role can read (`permitted_attributes_for_show`, `hidden_attributes_for_show`) and write (`permitted_attributes_for_create`, `permitted_attributes_for_update`). |
 | 6 | **Validation** | ActiveModel validations with `allow_nil: true` convention (field presence controlled by policy, format by model). |
 | 7 | **Cross-Tenant FK Validation** | Foreign key references validated to belong to current organization, even through indirect FK relationships. |

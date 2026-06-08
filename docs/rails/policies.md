@@ -442,3 +442,78 @@ If the user is not authenticated at all and the route requires authentication, t
 ```
 
 **HTTP status:** `401 Unauthorized`
+
+---
+
+## Layered Permissions
+
+By default Rhino resolves a user's effective permissions from **three layers**, so you don't have to copy a full permission set onto every user.
+
+```
+effective = (role ∪ granted) − denied        # deny always wins
+```
+
+| Layer | Where it lives | Purpose |
+|-------|----------------|---------|
+| **role** | `org_role_permissions(organization_id, role_id, permissions)` | The shared set every user with that role in that org inherits. Defined **once** per (org, role). |
+| **granted** | `user_roles.granted_permissions` | Extra abilities for one user (additive). |
+| **denied** | `user_roles.denied_permissions` | Abilities removed from one user (subtractive). **Deny wins over everything**, even a role `*`. |
+| **legacy** | `user_roles.permissions` | The pre-4.3 per-user list, still honored as an allow layer. |
+
+The pre-existing global `roles.permissions` column is also still honored, as a **fallback** consulted only when the layers above are empty — so existing apps keep working unchanged. Wildcards (`*`, `posts.*`) work on every layer.
+
+### Why this exists
+
+Previously, storing partial permissions on `user_roles.permissions` shadowed the role entirely, so teams stored the **full** set on every user and invented a new role for every exception. With the role layer:
+
+- **Add a table** → grant `widgets.*` on the role layer once; every member inherits it.
+- **Give one user extra access** → add to their `granted_permissions`.
+- **Take one ability from one user** → add it to their `denied_permissions` — no new role needed.
+
+### Examples
+
+```ruby
+# Org-wide role layer: every "editor" in org 1 can manage posts and read comments.
+OrgRolePermission.create!(
+  organization: org, role: editor_role,
+  permissions: ["posts.*", "comments.index"]
+)
+
+# This editor also gets comment moderation, but cannot delete posts.
+UserRole.create!(
+  user: user, role: editor_role, organization: org,
+  granted_permissions: ["comments.destroy"],
+  denied_permissions: ["posts.destroy"]
+)
+
+user.has_permission?("posts.update", org)     # => true  (role layer)
+user.has_permission?("comments.destroy", org) # => true  (granted)
+user.has_permission?("posts.destroy", org)    # => false (denied wins)
+```
+
+Use `explain_permission` to see which layer decided:
+
+```ruby
+user.explain_permission("posts.destroy", org)
+# => { granted: false, reason: "denied" }
+```
+
+### Resolution rules
+
+1. If the permission matches `denied_permissions` → **DENY** (deny always wins).
+2. Else if it matches `role ∪ granted ∪ legacy` → **ALLOW**.
+3. Else, fall back to the global `roles.permissions` only when the layers above are empty.
+4. Otherwise → **DENY** (default-deny).
+
+Deny is intentionally **deny-overrides**, not "most-specific-wins": a denied permission stays denied even under a role `*`.
+
+### Migrating an existing app
+
+To lift your existing per-user permissions into the role layer, run:
+
+```bash
+rake rhino:permissions_migrate           # dry-run preview
+rake rhino:permissions_migrate APPLY=1   # write the changes
+```
+
+For each `(organization, role)` group it computes the common subset of every user's permissions, writes it to `org_role_permissions`, and reduces each user row to just its delta. Effective permissions are preserved exactly. It is idempotent and skips groups that already have a role layer.
