@@ -175,46 +175,54 @@ Users have roles scoped to each organization. A user can be **admin** in one org
 
 ### Setting Up Roles
 
+Roles are named buckets. Their permissions live in the **role layer**
+(`org_role_permissions`), defined once per `(organization, role)` — every member
+of that role in that org inherits it.
+
 ```ruby title="db/seeds.rb"
-admin = Role.create!(
-  name: 'Admin',
-  slug: 'admin',
-  permissions: ['*']
-)
+# Roles (just slug + name)
+admin  = Role.create!(name: 'Admin',  slug: 'admin')
+editor = Role.create!(name: 'Editor', slug: 'editor')
+viewer = Role.create!(name: 'Viewer', slug: 'viewer')
 
-editor = Role.create!(
-  name: 'Editor',
-  slug: 'editor',
-  permissions: [
-    'posts.index', 'posts.show', 'posts.store', 'posts.update',
-    'comments.*',
-  ]
-)
-
-viewer = Role.create!(
-  name: 'Viewer',
-  slug: 'viewer',
-  permissions: ['posts.index', 'posts.show']
-)
+# The shared role layer — what each role can do *within an organization*.
+[acme_corp, other_org].each do |org|
+  OrgRolePermission.create!(organization: org, role: admin,  permissions: ['*'])
+  OrgRolePermission.create!(organization: org, role: editor,
+    permissions: ['posts.index', 'posts.show', 'posts.store', 'posts.update', 'comments.*'])
+  OrgRolePermission.create!(organization: org, role: viewer,
+    permissions: ['posts.index', 'posts.show'])
+end
 ```
 
 ### Assigning Users to Organizations
 
+Each `user_roles` row carries only the user's **deltas** — extra abilities
+(`granted_permissions`) or carve-outs (`denied_permissions`). Leave them empty to
+inherit the role layer as-is.
+
 ```ruby title="db/seeds.rb"
-# User is admin in Acme Corp
-UserRole.create!(
-  user_id: user.id,
-  organization_id: acme_corp.id,
-  role_id: admin.id
-)
+# User is admin in Acme Corp (inherits '*' from the role layer)
+UserRole.create!(user_id: user.id, organization_id: acme_corp.id, role_id: admin.id)
 
 # Same user is viewer in Other Org
-UserRole.create!(
-  user_id: user.id,
-  organization_id: other_org.id,
-  role_id: viewer.id
-)
+UserRole.create!(user_id: user.id, organization_id: other_org.id, role_id: viewer.id)
+
+# Bob is an editor, but specifically may NOT delete posts (deny wins):
+UserRole.create!(user_id: bob.id, organization_id: acme_corp.id, role_id: editor.id,
+  denied_permissions: ['posts.destroy'])
+
+# Carol is a viewer, but is also allowed to moderate comments (extra grant):
+UserRole.create!(user_id: carol.id, organization_id: acme_corp.id, role_id: viewer.id,
+  granted_permissions: ['comments.destroy'])
 ```
+
+:::tip Effective permissions
+`effective = (role ∪ granted) − denied`, and **deny always wins** (even over a
+role `*`). The legacy global `roles.permissions` column is still honored as a
+fallback. See [Layered Permissions](./policies.md#layered-permissions) for the
+full model and the `rake rhino:permissions_migrate` command.
+:::
 
 ### Checking Permissions
 

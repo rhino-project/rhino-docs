@@ -81,7 +81,7 @@ Or keep reading for the architecture overview and a Hello World example.
 
 - **Automatic REST API** — register a model, get full CRUD endpoints with zero controllers
 - **React Hooks** — TanStack Query hooks for every endpoint (index, show, store, update, delete)
-- **Role-Based Permissions** — per-organization roles with wildcard support (`posts.*`, `*`)
+- **Role-Based Permissions** — layered: a shared per-org role layer plus per-user grant/deny overrides (deny wins), with wildcard support (`posts.*`, `*`)
 - **Role-Based Validation** — different fields allowed per role (admin vs editor vs viewer)
 - **Multi-Tenancy** — built-in organization scoping via URL prefix or subdomain
 - **Soft Deletes** — trash, restore, and force-delete with separate permissions

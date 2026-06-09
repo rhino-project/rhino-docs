@@ -380,7 +380,7 @@ Rhino uses two permission sources based on the route group context:
 
 | Route Group | Permission Source | When Used |
 |-------------|------------------|-----------|
-| `:tenant` | `roles.permissions` (via `user_roles`) | Organization middleware sets org on request |
+| `:tenant` | layered, org-scoped (`(role ∪ granted) − denied`) | Organization middleware sets org on request |
 | Any other | `users.permissions` | No organization context |
 
 ### Setup
@@ -419,10 +419,20 @@ admin.update!(permissions: ['*'])
 
 When `has_permission?` is called:
 
-1. **Organization present** (tenant route group) → checks `roles.permissions` for that organization via `user_roles`
-2. **No organization** (any other route group) → checks `users.permissions` directly
+1. **Organization present** (tenant route group) → resolves the **layered**
+   permissions for that organization: `effective = (role ∪ granted) − denied`,
+   where `role` is the shared `org_role_permissions` for `(org, role)`, and
+   `granted`/`denied` are the per-user deltas on `user_roles`. The legacy
+   `user_roles.permissions` and the global `roles.permissions` are still honored.
+2. **No organization** (any other route group) → checks `users.permissions`
+   directly (plus an optional `users.denied_permissions`).
 
-This is deterministic — the decision is based on the presence of an organization in the request, which is set by middleware in tenant route groups. There is no fallback chain.
+**Deny always wins** — a permission in `denied_permissions` is denied even under
+a role `*`. The decision is deterministic, based on the presence of an
+organization in the request (set by middleware in tenant route groups).
+
+See [Layered Permissions](./policies.md#layered-permissions) for the full model
+and the migration task.
 
 ## Request Flow Walkthrough
 

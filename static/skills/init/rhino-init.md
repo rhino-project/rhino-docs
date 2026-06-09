@@ -453,7 +453,7 @@ Request
 | 1 | **Automatic CRUD Endpoints** | Generates index, show, store, update, destroy for every registered model — zero controller code |
 | 2 | **Authentication** | Built-in login, logout, password recovery and reset via Sanctum |
 | 3 | **Authorization & Policies** | ResourcePolicy base class with convention-based permission checks (`{slug}.{action}`). Wildcards supported |
-| 4 | **Role-Based Access Control** | Permissions per-role per-organization via user_roles pivot |
+| 4 | **Role-Based Access Control (layered)** | Shared per-org role layer (`org_role_permissions`) + per-user `granted_permissions`/`denied_permissions` deltas; `effective = (role ∪ granted) − denied`, deny wins. Wildcards on every layer. |
 | 5 | **Attribute-Level Permissions** | Control which fields each role can read and write |
 | 6 | **Validation** | Dual-layer: format rules + field presence rules. Supports role-keyed rules |
 | 7 | **Cross-Tenant FK Validation** | `exists:` rules auto-scoped to current organization |

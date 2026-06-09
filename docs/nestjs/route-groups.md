@@ -421,7 +421,17 @@ Two permission sources are used, determined by the route group context:
 
 | Route Group | Permission Source | Description |
 |-------------|------------------|-------------|
-| `'tenant'` | `user_roles.permissions` | Organization-scoped, checked per-org |
+| `'tenant'` | layered, org-scoped | `(role ∪ granted) − denied` per org (see below) |
 | Any other | `users.permissions` | User-level, checked directly on the user model |
 
-The decision is deterministic based on the presence of an organization in the request context. There is no fallback chain. See [Policies](./policies) for details.
+For a **tenant** group the permissions are resolved through the **layered**
+model: `effective = (role ∪ granted) − denied`, where `role` is the shared
+`OrgRolePermission` for `(org, role)`, and `granted`/`denied` are the per-user
+deltas (`grantedPermissions` / `deniedPermissions`) on `userRoles`. The legacy
+`userRoles.permissions` is still honored as an allow layer.
+
+**Deny always wins** — a permission in `deniedPermissions` is denied even under a
+role `*`. The decision is deterministic based on the presence of an organization
+in the request context. See [Layered Permissions](./policies#layered-permissions)
+for the full model, the required Prisma schema, and the
+`npx rhino permissions-migrate` command.

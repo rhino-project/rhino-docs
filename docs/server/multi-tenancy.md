@@ -190,36 +190,39 @@ Users have roles scoped to each organization. A user can be **admin** in one org
 
 ### Setting Up Roles
 
+Roles are named buckets. Their permissions live in the **role layer**
+(`org_role_permissions`), defined once per `(organization, role)` — every member
+of that role in that org inherits it.
+
 ```php title="database/seeders/RoleSeeder.php"
-// Create roles
-$admin = Role::create([
-    'name' => 'Admin',
-    'slug' => 'admin',
-    'permissions' => ['*'],
-]);
+use App\Models\OrgRolePermission;
 
-$editor = Role::create([
-    'name' => 'Editor',
-    'slug' => 'editor',
-    'permissions' => [
-        'posts.index', 'posts.show', 'posts.store', 'posts.update',
-        'comments.*',
-    ],
-]);
+// Roles (just slug + name)
+$admin  = Role::create(['name' => 'Admin',  'slug' => 'admin']);
+$editor = Role::create(['name' => 'Editor', 'slug' => 'editor']);
+$viewer = Role::create(['name' => 'Viewer', 'slug' => 'viewer']);
 
-$viewer = Role::create([
-    'name' => 'Viewer',
-    'slug' => 'viewer',
-    'permissions' => ['posts.index', 'posts.show'],
-]);
+// The shared role layer — what each role can do *within an organization*.
+foreach ([$acmeCorp, $otherOrg] as $org) {
+    OrgRolePermission::create(['organization_id' => $org->id, 'role_id' => $admin->id,
+        'permissions' => ['*']]);
+    OrgRolePermission::create(['organization_id' => $org->id, 'role_id' => $editor->id,
+        'permissions' => ['posts.index', 'posts.show', 'posts.store', 'posts.update', 'comments.*']]);
+    OrgRolePermission::create(['organization_id' => $org->id, 'role_id' => $viewer->id,
+        'permissions' => ['posts.index', 'posts.show']]);
+}
 ```
 
 ### Assigning Users to Organizations
 
+Each `user_roles` row carries only the user's **deltas** — extra abilities
+(`granted_permissions`) or carve-outs (`denied_permissions`). Leave them empty to
+inherit the role layer as-is.
+
 ```php title="database/seeders/RoleSeeder.php"
 use App\Models\UserRole;
 
-// User is admin in Acme Corp
+// User is admin in Acme Corp (inherits '*' from the role layer)
 UserRole::create([
     'user_id' => $user->id,
     'organization_id' => $acmeCorp->id,
@@ -232,7 +235,30 @@ UserRole::create([
     'organization_id' => $otherOrg->id,
     'role_id' => $viewer->id,
 ]);
+
+// Bob is an editor, but specifically may NOT delete posts (deny wins):
+UserRole::create([
+    'user_id' => $bob->id,
+    'organization_id' => $acmeCorp->id,
+    'role_id' => $editor->id,
+    'denied_permissions' => ['posts.destroy'],
+]);
+
+// Carol is a viewer, but is also allowed to moderate comments (extra grant):
+UserRole::create([
+    'user_id' => $carol->id,
+    'organization_id' => $acmeCorp->id,
+    'role_id' => $viewer->id,
+    'granted_permissions' => ['comments.destroy'],
+]);
 ```
+
+:::tip Effective permissions
+`effective = (role ∪ granted) − denied`, and **deny always wins** (even over a
+role `*`). See [Layered Permissions](./policies.md#layered-permissions) for the
+full model, wildcards, the `explainPermission()` helper, and the
+`rhino:permissions-migrate` command for upgrading existing apps.
+:::
 
 ### Checking Permissions
 
