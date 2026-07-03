@@ -112,6 +112,109 @@ GET /api/posts?search=laravel&filter[status]=published
 ```
 :::
 
+## Named Scopes
+
+Named scopes let the client **select** a model-whitelisted query scope by name via `?scope=`. Unlike filters and sorts (which the client composes freely from allowed columns), a named scope is a reusable, server-defined query fragment — ideal for complex joins or user-specific constraints you don't want to express in the URL.
+
+Declare the whitelist and a default on the model, then implement each scope as an Eloquent local scope:
+
+```php title="app/Models/Route.php"
+class Route extends RhinoModel
+{
+    // Scopes the client may select by name via ?scope=
+    public static $allowedScopes = ['availableForDrivers'];
+
+    // Applied automatically when no ?scope= is given
+    public static $defaultScope = 'active';
+
+    public function scopeActive(Builder $query, ?Authenticatable $user): Builder
+    {
+        return $query->where('status', 'active');
+    }
+
+    public function scopeAvailableForDrivers(Builder $query, ?Authenticatable $user): Builder
+    {
+        if (! $user) {
+            return $query->whereRaw('1 = 0'); // fail closed when unauthenticated
+        }
+
+        return $query
+            ->where('status', 'active')
+            ->whereDoesntHave('assignments', fn ($q) => $q->whereNull('completed_at'))
+            ->whereHas('region.driverQualifications', fn ($q) => $q
+                ->where('driver_id', $user->id)
+                ->where('expires_at', '>', now()));
+    }
+}
+```
+
+The scope method receives the **current authenticated user** as its first argument — resolved server-side from the request. The client never sends user identity; it only sends the scope name. Always fail closed (`whereRaw('1 = 0')`) when `$user` is null.
+
+### Selecting a scope
+
+```bash title="terminal"
+# Apply the availableForDrivers scope
+GET /api/routes?scope=availableForDrivers
+
+# No ?scope= → the model's $defaultScope ('active') is applied automatically
+GET /api/routes
+```
+
+### Try it with curl
+
+A full run against a live server. The client only ever sends a bearer token and a scope *name* — the joins and the current-driver filter are resolved server-side:
+
+```bash title="terminal"
+# Authenticate — Rhino returns a bearer token
+TOKEN=$(curl -s -X POST http://localhost:8000/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"driver@example.com","password":"password"}' | jq -r .token)
+
+# No ?scope= → the model's $defaultScope ('active') is applied automatically
+curl -s http://localhost:8000/api/routes \
+  -H "Authorization: Bearer $TOKEN"
+# → { "data": [ /* only 'active' routes */ ] }
+
+# Select the availableForDrivers scope
+curl -s "http://localhost:8000/api/routes?scope=availableForDrivers" \
+  -H "Authorization: Bearer $TOKEN"
+# → { "data": [ /* only the routes THIS driver may take */ ] }
+```
+
+Log in as a different driver and the same `?scope=availableForDrivers` URL returns a different set — the scope reads the authenticated user, so no per-user query has to live in the client.
+
+### The 403 contract
+
+Unlike filters and sorts, an unknown or non-whitelisted scope name is **not** silently ignored — it returns a `403`, mirroring the [include-authorization](#include-authorization) behavior:
+
+```bash title="terminal"
+# 'archived' is not in $allowedScopes:
+GET /api/routes?scope=archived
+# → 403 { "message": "Scope 'archived' is not allowed" }
+```
+
+Requesting the declared default scope by name (`?scope=active`) is always allowed, even if you did not list it in `$allowedScopes`.
+
+:::warning The default scope is a convenience, not a security boundary
+`$defaultScope` is a listing default that a client **replaces** the moment it selects another scope. Do **not** put mandatory row restrictions (tenancy, visibility) in it — those belong in an always-on **global scope** (`BelongsToOrganization`, `HasAutoScope`, or a manual global scope), which no `?scope=` value can bypass. Note the two meanings of "scope" in Rhino: a **named scope** *selects* a client-chosen subset, while a **global scope** *enforces* a subset on every query.
+
+A named scope can only **narrow** the already-authorized, organization-scoped set — it is applied on top of global scoping and can never widen it.
+:::
+
+### Composition and where it applies
+
+Named scopes compose with everything else — `filter`, `sort`, `search`, `fields`, `include`, and pagination all apply on top of the selected scope:
+
+```bash title="terminal"
+GET /api/routes?scope=availableForDrivers&sort=-created_at&include=region&page=1&per_page=20
+```
+
+Scoping applies to the **index** listing and the **trashed** (soft-delete) listing. A single-record `show` is **not** scoped.
+
+:::tip Prefer `whereHas`/`whereExists` over `join()` in scope bodies
+Raw `join()` duplicates rows under `paginate()` and makes `?sort` ambiguous. Use `whereHas`/`whereExists` (as above) so counts and sorting stay correct. If you must use `distinct`, do not combine the scope with `?fields`.
+:::
+
 ## Pagination
 
 Control page size and navigate through results:
@@ -237,10 +340,11 @@ This prevents users from bypassing permissions through eager loading.
 ## Combined Example
 
 ```bash title="terminal"
-GET /api/posts?filter[status]=published&sort=-created_at&include=user,comments&fields[posts]=id,title,excerpt&search=laravel&page=1&per_page=20
+GET /api/posts?scope=active&filter[status]=published&sort=-created_at&include=user,comments&fields[posts]=id,title,excerpt&search=laravel&page=1&per_page=20
 ```
 
 This single request:
+- Selects the `active` named scope (narrowing the base result set)
 - Filters to published posts only
 - Sorts newest first
 - Eager loads user and comments

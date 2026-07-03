@@ -23,6 +23,7 @@ Rhino auto-generates a complete REST API from your model definitions. Here is ev
 | 11 | **Pagination** | `?page=N&per_page=N`. Metadata in response headers (`X-Current-Page`, `X-Last-Page`, `X-Per-Page`, `X-Total`). Per-page clamped 1–100. |
 | 12 | **Field Selection (Sparse Fieldsets)** | `?fields[posts]=id,title,status` to reduce payload. Works with relationships. |
 | 13 | **Eager Loading (Includes)** | `?include=user,comments` with nested support (`comments.user`). Count (`commentsCount`) and existence (`commentsExists`) suffixes. Authorization checked per include. |
+| 13b | **Named Scopes** | Client selects a model-whitelisted scope via `?scope=name`. `public static $allowedScopes` + `$defaultScope` on the model; `scope{Name}(Builder $query, ?Authenticatable $user)` methods receive the current user server-side. No `?scope` → default applies. Non-whitelisted/unknown name → **403** `{"message":"Scope 'x' is not allowed"}` (NOT silently ignored, unlike filters/sorts). Applies to index + trashed, not show. Narrows the authorized/org-scoped set only. |
 | 14 | **Multi-Tenancy** | Organization-based data isolation via `BelongsToOrganization` trait. Auto-sets `organization_id`, global scope filters queries. Route-prefix or subdomain resolution. |
 | 15 | **Nested Ownership Auto-Detection** | Models without direct `organization_id` are scoped by walking `BelongsTo` chains (e.g., Comment → Post → Blog → Organization). |
 | 16 | **Route Groups** | Multiple URL prefixes (and optional per-group `domain`/host constraints) with different middleware/auth per group. Reserved names: `tenant` (org-scoped + invitations) and `public` (no auth). Opt-in per-group `auth` (group-tagged auth route set) and `hooks` (lifecycle hooks). |
@@ -481,6 +482,8 @@ class Post extends RhinoModel
 | `$allowedFields` | `array` | Fields for sparse fieldsets `?fields[model]=f1,f2` |
 | `$allowedIncludes` | `array` | Relationships for `?include=relation` |
 | `$allowedSearch` | `array` | Fields searched with `?search=term` |
+| `$allowedScopes` | `array` | Named scopes selectable via `?scope=name` (each needs a `scope{Name}(Builder, ?Authenticatable $user)` method); non-whitelisted → 403 |
+| `$defaultScope` | `string` | Named scope applied when no `?scope=` given (e.g. `'active'`); listing convenience, not a security boundary |
 | `$paginationEnabled` | `bool` | Enable/disable pagination (default `true`) |
 | `$perPage` | `int` | Records per page |
 | `$middleware` | `array` | Middleware for all routes |
@@ -1044,6 +1047,48 @@ Response for count:
 ```
 
 Include authorization: Rhino checks `viewAny` permission on included resources. If denied -> 403.
+
+### Named Scopes
+
+Client selects a model-whitelisted named scope via `?scope=name`. Declare the whitelist + default and implement each as an Eloquent local scope. The current authenticated user is passed as the first arg (server-resolved — the client never sends identity); fail closed when null.
+
+```php
+class Route extends RhinoModel
+{
+    public static $allowedScopes = ['availableForDrivers'];
+    public static $defaultScope  = 'active';
+
+    public function scopeActive(Builder $query, ?Authenticatable $user): Builder
+    {
+        return $query->where('status', 'active');
+    }
+
+    public function scopeAvailableForDrivers(Builder $query, ?Authenticatable $user): Builder
+    {
+        if (! $user) return $query->whereRaw('1 = 0'); // fail closed
+        return $query
+            ->where('status', 'active')
+            ->whereDoesntHave('assignments', fn ($q) => $q->whereNull('completed_at'))
+            ->whereHas('region.driverQualifications', fn ($q) => $q
+                ->where('driver_id', $user->id)
+                ->where('expires_at', '>', now()));
+    }
+}
+```
+
+```bash
+GET /api/routes?scope=availableForDrivers   # applies the named scope
+GET /api/routes                             # no ?scope → $defaultScope ('active') applied
+GET /api/routes?scope=archived              # → 403 { "message": "Scope 'archived' is not allowed" }
+```
+
+Rules:
+- Non-whitelisted/unknown name → **403** (NOT silently ignored — unlike filters/sorts). Mirrors include-authorization.
+- Requesting the declared default by name is always allowed.
+- Applies to the **index** and **trashed** listings. `show` is NOT scoped.
+- Composes with filter/sort/search/fields/include/pagination and with org/authorization scoping — a named scope can only **narrow**, never widen, the authorized set.
+- `$defaultScope` is a listing convenience, **not** a security boundary — selecting another scope replaces it. Put mandatory row restrictions (tenancy, visibility) in a global scope (`BelongsToOrganization` / `HasAutoScope`), never the default scope. "Scope" is overloaded: named scopes SELECT a client-chosen subset; global scopes ENFORCE one (always on).
+- Prefer `whereHas`/`whereExists` over `join()` in scope bodies (joins duplicate rows under `paginate()` and make `?sort` ambiguous). If using `distinct`, don't combine with `?fields`.
 
 ### Combined Example
 

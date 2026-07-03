@@ -70,6 +70,7 @@ interface ModelQueryOptions {
   sort?: string;
   fields?: string[];
   search?: string;
+  scope?: string;
   page?: number;
   perPage?: number;
 }
@@ -82,6 +83,7 @@ interface ModelQueryOptions {
 | `sort` | `string` | `'-created_at'` | Sort field. Prefix with `-` for descending. Comma-separate for multiple: `'-created_at,title'`. |
 | `fields` | `string[]` | `['id', 'title']` | Sparse fieldset. Only return these fields. |
 | `search` | `string` | `'laravel'` | Full-text search query sent as `?search=laravel`. |
+| `scope` | `string` | `'availableForDrivers'` | Selects a server-declared [named scope](./querying#named-scopes). Sent as `?scope=availableForDrivers`. Applies to `useModelIndex` and `useModelTrashed` (not `useModelShow`). Omit to use the model's default scope; an unknown scope 403s. |
 | `page` | `number` | `1` | Current page number. |
 | `perPage` | `number` | `20` | Number of records per page. Sent as `?per_page=20`. |
 

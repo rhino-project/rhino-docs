@@ -25,6 +25,7 @@ Rhino auto-generates a complete REST API from your model definitions. Here is ev
 | 11 | **Pagination** | `?page=N&per_page=N`. Metadata in response headers (`X-Current-Page`, `X-Last-Page`, `X-Per-Page`, `X-Total`). Per-page clamped 1–100. Powered by Pagy. |
 | 12 | **Field Selection (Sparse Fieldsets)** | `?fields[posts]=id,title,status` to reduce payload. Primary key always included. |
 | 13 | **Eager Loading (Includes)** | `?include=user,comments` with nested support (`comments.user`). Count (`commentsCount`) and existence (`commentsExists`) suffixes. Authorization checked per include. |
+| 13b | **Named Scopes** | Client selects a model-whitelisted scope via `?scope=name` (camelCase on wire). `rhino_scopes :active, available_for_drivers: Scopes::AvailableForDriversScope` + `rhino_default_scope :active`. Complex scopes subclass `Rhino::ResourceScope` (`apply(relation)`, `user`/`organization`/`role` helpers). No `?scope` → default applies. Non-whitelisted name → **403** (not silently ignored). Index + trashed only, not show. Narrows the authorized/org-scoped set only. |
 | 14 | **Multi-Tenancy** | Organization-based data isolation via `BelongsToOrganization` concern. Auto-sets `organization_id` via `RequestStore`, default scope filters queries. Route-prefix or subdomain resolution. |
 | 15 | **Nested Ownership Auto-Detection** | Models without direct `organization_id` are scoped by walking `belongs_to` chains (e.g., Comment → Post → Blog → Organization). |
 | 16 | **Route Groups** | Multiple URL prefixes with different middleware/auth per group, optionally constrained to a host via `domain:` (literal or `{organization}.example.com` for subdomain multitenancy). Reserved names: `:tenant` (org-scoped + invitations) and `:public` (no auth). Opt-in per-group `auth:` (group-tagged auth route set) and `hooks:` (lifecycle hooks). |
@@ -330,6 +331,8 @@ end
 | `rhino_fields` | `*symbols` | Fields for sparse fieldsets `?fields[model]=field1,field2` |
 | `rhino_includes` | `*symbols` | Relationships for `?include=relation` |
 | `rhino_search` | `*symbols/strings` | Fields for `?search=term`. Supports dot-notation (e.g., `'user.name'`) |
+| `rhino_scopes` | `*symbols`, `**hash` | Named scopes for `?scope=name` (symbol = AR scope; `name: ScopeClass` = `Rhino::ResourceScope` subclass). Wire names camelCase; non-whitelisted → 403 |
+| `rhino_default_scope` | `symbol` | Named scope applied when no `?scope=` given (e.g. `:active`); listing convenience, not a security boundary |
 | `rhino_pagination_enabled` | `bool` | Enable/disable pagination (default: `false`) |
 | `rhino_per_page` | `integer` | Records per page (default: `25`) |
 | `rhino_middleware` | `*strings` | Middleware for ALL routes |
@@ -874,6 +877,51 @@ Response:
     "comments_exists": true
 }
 ```
+
+### Named Scopes
+
+Client selects a model-whitelisted named scope via `?scope=name`. Whitelist with `rhino_scopes` + `rhino_default_scope`. Wire names are camelCase (`?scope=availableForDrivers`), underscored internally.
+
+```ruby
+class Route < Rhino::RhinoModel
+  rhino_scopes :active, available_for_drivers: Scopes::AvailableForDriversScope
+  rhino_default_scope :active
+
+  scope :active, -> { where(status: "active") }   # simple: plain AR scope by symbol
+end
+```
+
+Complex scopes subclass `Rhino::ResourceScope` and implement `apply(relation)`, using the `user` / `organization` / `role` helpers (backed by `RequestStore`). The current user is server-resolved — the client never sends identity. Fail closed with `relation.none` when `user` is nil:
+
+```ruby
+module Scopes
+  class AvailableForDriversScope < Rhino::ResourceScope
+    def apply(relation)
+      return relation.none unless user
+      relation
+        .where(status: "active")
+        .joins(region: :driver_qualifications)
+        .where(driver_qualifications: { driver_id: user.id })
+        .where("driver_qualifications.expires_at > ?", Time.current)
+        .distinct
+    end
+  end
+end
+```
+
+```bash
+GET /api/routes?scope=availableForDrivers   # applies the named scope
+GET /api/routes                             # no ?scope → rhino_default_scope (:active) applied
+GET /api/routes?scope=archived              # → 403 { "message": "Scope 'archived' is not allowed" }
+```
+
+Rules:
+- Non-whitelisted/unknown name → **403** (NOT silently ignored — unlike filters/sorts). Mirrors include-authorization.
+- Requesting the declared default by name is always allowed.
+- Applies to the **index** and **trashed** listings. `show` is NOT scoped.
+- Composes with filter/sort/search/fields/include/pagination and with org/authorization scoping — a named scope can only **narrow**, never widen, the authorized set.
+- Do NOT name a scope class `Scopes::<ModelName>Scope` — that is auto-applied globally by `HasAutoScope`. Always derive from the `relation` argument.
+- `rhino_default_scope` is a listing convenience, **not** a security boundary — selecting another scope replaces it. Put mandatory row restrictions (tenancy, visibility) in a global scope (`BelongsToOrganization` / `HasAutoScope`), never the default scope. "Scope" is overloaded: named scopes SELECT a client-chosen subset; global scopes ENFORCE one (always on).
 
 ### Combined Example
 

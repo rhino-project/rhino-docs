@@ -21,6 +21,7 @@ interface ModelQueryOptions {
   sort?: string;
   fields?: string[];
   search?: string;
+  scope?: string;
   page?: number;
   perPage?: number;
 }
@@ -459,6 +460,75 @@ function SearchablePosts() {
 
 </TabItem>
 </Tabs>
+
+## Named Scopes
+
+Use the `scope` option to **select** a server-defined named scope by name. The backend declares which scopes a model exposes (and a default); the client just picks one. This is ideal for complex, user-specific listings whose joins are resolved server-side — you send a name, not the query.
+
+```tsx title="src/components/DriverRoutes.tsx"
+// Only the routes this authenticated driver may take
+const { data } = useModelIndex('routes', { scope: 'availableForDrivers' });
+```
+
+Maps to: `GET /api/routes?scope=availableForDrivers`
+
+When you omit `scope`, the server applies the model's declared **default scope** automatically. Named scopes compose with `filters`, `sort`, `page`, `perPage`, `search`, `includes`, and `fields`:
+
+```tsx title="src/components/DriverRoutes.tsx"
+const { data } = useModelIndex('routes', {
+  scope: 'availableForDrivers',
+  sort: '-created_at',
+  includes: ['region'],
+  page,
+  perPage: 20,
+});
+```
+
+It also works with `useModelTrashed`:
+
+```tsx title="src/components/ActiveTrash.tsx"
+const { data } = useModelTrashed('routes', { scope: 'active' });
+```
+
+:::info Not applied by `useModelShow`
+`scope` narrows list results, so it applies to `useModelIndex` and `useModelTrashed`. It is **not** applied by `useModelShow` (single-record fetches are not scoped).
+:::
+
+:::warning Unknown scopes return 403
+Unlike filters and sorts (which the server silently ignores when not allowed), a scope name the model has not whitelisted causes the request to **403**. This surfaces through the client's `onForbidden` path — handle it like any other authorization failure.
+:::
+
+### Worked Example: driver routes
+
+The backend declares an `availableForDrivers` named scope on the `Route` model — a scope whose body joins assignments and driver qualifications and filters to the *authenticated* driver, all resolved server-side. The drivers app then only has to ask for it by name:
+
+```tsx title="src/components/AvailableRoutes.tsx"
+import { useModelIndex } from '@rhino-dev/rhino-react';
+
+function AvailableRoutes() {
+  const { data: response, isLoading } = useModelIndex('routes', {
+    scope: 'availableForDrivers',
+    sort: '-created_at',
+    includes: ['region'],
+  });
+
+  const routes = response?.data || [];
+
+  if (isLoading) return <p>Loading routes...</p>;
+
+  return (
+    <ul>
+      {routes.map(route => (
+        <li key={route.id}>
+          {route.name} — {route.region?.name}
+        </li>
+      ))}
+    </ul>
+  );
+}
+```
+
+The client sends only `?scope=availableForDrivers`; the server resolves the current user and applies the complex joins, returning exactly the routes that driver may take. The client never sends user identity.
 
 ## Pagination
 

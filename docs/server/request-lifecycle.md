@@ -107,12 +107,17 @@ class Comment extends Model
 
 See [Multi-Tenancy](./multi-tenancy) for full details.
 
+:::info Two kinds of "scope"
+This layer is the **always-on** scope — the framework enforces it on every request, and no query parameter can bypass it. It is distinct from a **client-selected named scope** (`?scope=name`), which is applied in the Query Builder step below. A named scope runs *after* organization/authorization scoping and can only **narrow** the authorized set, never widen it.
+:::
+
 ## 4. Query Builder
 
 With the scope applied, Rhino builds the database query using parameters from the request URL:
 
 | Feature | Query Parameter | Example |
 |---------|----------------|---------|
+| **Scope selection** | `?scope=name` | `?scope=availableForDrivers` |
 | **Filtering** | `?filter[field]=value` | `?filter[status]=published` |
 | **Sorting** | `?sort=field` | `?sort=-created_at` |
 | **Searching** | `?search=term` | `?search=laravel` |
@@ -121,6 +126,8 @@ With the scope applied, Rhino builds the database query using parameters from th
 | **Fields** | `?fields[model]=f1,f2` | `?fields[posts]=id,title` |
 
 Only fields declared in `$allowedFilters`, `$allowedSorts`, `$allowedSearch`, `$allowedIncludes`, and `$allowedFields` on your model are accepted. Anything else is silently ignored.
+
+**Scope selection is the exception.** A `?scope=` value that is not in `$allowedScopes` (and is not the declared `$defaultScope`) returns a **403**, rather than being silently ignored — matching the include-authorization contract. When no `?scope=` is given, the model's `$defaultScope` is applied. The selected scope narrows the already organization-scoped, authorized set and receives the current authenticated user server-side. See [Querying — Named Scopes](./querying#named-scopes).
 
 See [Querying](./querying) for full details.
 

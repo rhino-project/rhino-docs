@@ -114,6 +114,114 @@ GET /api/posts?search=rails&filter[status]=published
 ```
 :::
 
+## Named Scopes
+
+Named scopes let the client **select** a model-whitelisted query scope by name via `?scope=`. Unlike filters and sorts (which the client composes freely from allowed columns), a named scope is a reusable, server-defined query fragment — ideal for complex joins or user-specific constraints you don't want to express in the URL.
+
+Declare the whitelist and a default with `rhino_scopes` and `rhino_default_scope`. Scope names are **camelCase on the wire** (`?scope=availableForDrivers`) and underscored internally:
+
+```ruby title="app/models/route.rb"
+class Route < Rhino::RhinoModel
+  # Scopes the client may select by name. A plain AR scope can be referenced
+  # by symbol; a complex scope points at a Rhino::ResourceScope subclass.
+  rhino_scopes :active, available_for_drivers: Scopes::AvailableForDriversScope
+
+  # Applied automatically when no ?scope= is given (wire name: 'active')
+  rhino_default_scope :active
+
+  # Simple scopes can be plain ActiveRecord scopes referenced by symbol
+  scope :active, -> { where(status: "active") }
+end
+```
+
+### Simple vs complex scopes
+
+A **simple** scope is a plain AR scope referenced by symbol (`rhino_scopes :active` with `scope :active, ...`). A **complex** scope subclasses `Rhino::ResourceScope` and implements `apply(relation)`, giving you access to the current `user`, `organization`, and `role` (backed by `RequestStore`):
+
+```ruby title="app/models/scopes/available_for_drivers_scope.rb"
+module Scopes
+  class AvailableForDriversScope < Rhino::ResourceScope
+    def apply(relation)
+      return relation.none unless user
+
+      relation
+        .where(status: "active")
+        .joins(region: :driver_qualifications)
+        .where(driver_qualifications: { driver_id: user.id })
+        .where("driver_qualifications.expires_at > ?", Time.current)
+        .distinct
+    end
+  end
+end
+```
+
+The `user` helper resolves the **current authenticated user** server-side — the client never sends user identity, only the scope name. Always fail closed (`relation.none`) when `user` is nil.
+
+:::warning Do not name a scope class `Scopes::<ModelName>Scope`
+That name is auto-applied globally by `HasAutoScope` (see [Models](./models#hasautoscope)) and would run on *every* query. Give named-scope classes a distinct name (e.g. `AvailableForDriversScope`) and always derive from the `relation` argument.
+:::
+
+### Selecting a scope
+
+```bash title="terminal"
+# Apply the availableForDrivers scope (camelCase on the wire)
+GET /api/routes?scope=availableForDrivers
+
+# No ?scope= → the model's rhino_default_scope (:active) is applied automatically
+GET /api/routes
+```
+
+### Try it with curl
+
+The camelCase name (`availableForDrivers`) is underscored server-side to the `available_for_drivers` scope. The client only sends a bearer token and the scope name:
+
+```bash title="terminal"
+# Authenticate — Rhino returns a bearer token
+TOKEN=$(curl -s -X POST http://localhost:3000/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"driver@example.com","password":"password"}' | jq -r .token)
+
+# No ?scope= → the model's rhino_default_scope (:active) is applied automatically
+curl -s http://localhost:3000/api/routes \
+  -H "Authorization: Bearer $TOKEN"
+# → { "data": [ /* only active routes */ ] }
+
+# Select the availableForDrivers scope
+curl -s "http://localhost:3000/api/routes?scope=availableForDrivers" \
+  -H "Authorization: Bearer $TOKEN"
+# → { "data": [ /* only the routes THIS driver may take */ ] }
+```
+
+Log in as a different driver and the same URL returns a different set — the scope reads `RequestStore[:rhino_current_user]`, so no per-user query has to live in the client.
+
+### The 403 contract
+
+Unlike filters and sorts, an unknown or non-whitelisted scope name is **not** silently ignored — it returns a `403`, mirroring the [include-authorization](#include-authorization) behavior:
+
+```bash title="terminal"
+# 'archived' is not whitelisted:
+GET /api/routes?scope=archived
+# → 403 { "message": "Scope 'archived' is not allowed" }
+```
+
+Requesting the declared default scope by name (`?scope=active`) is always allowed.
+
+:::warning The default scope is a convenience, not a security boundary
+`rhino_default_scope` is a listing default that a client **replaces** the moment it selects another scope. Do **not** put mandatory row restrictions (tenancy, visibility) in it — those belong in an always-on **global scope** (`BelongsToOrganization`, `HasAutoScope`, or a manual default scope), which no `?scope=` value can bypass. Note the two meanings of "scope" in Rhino: a **named scope** *selects* a client-chosen subset, while a **global scope** *enforces* a subset on every query.
+
+A named scope can only **narrow** the already-authorized, organization-scoped set — it is applied on top of global scoping and can never widen it.
+:::
+
+### Composition and where it applies
+
+Named scopes compose with everything else — `filter`, `sort`, `search`, `fields`, `include`, and pagination all apply on top of the selected scope:
+
+```bash title="terminal"
+GET /api/routes?scope=availableForDrivers&sort=-created_at&include=region&page=1&per_page=20
+```
+
+Scoping applies to the **index** listing and the **trashed** (soft-delete) listing. A single-record `show` is **not** scoped.
+
 ## Pagination
 
 Control page size and navigate through results:
@@ -257,10 +365,11 @@ This prevents users from bypassing permissions through eager loading.
 ## Combined Example
 
 ```bash title="terminal"
-GET /api/posts?filter[status]=published&sort=-created_at&include=user,comments&fields[posts]=id,title,excerpt&search=rails&page=1&per_page=20
+GET /api/posts?scope=active&filter[status]=published&sort=-created_at&include=user,comments&fields[posts]=id,title,excerpt&search=rails&page=1&per_page=20
 ```
 
 This single request:
+- Selects the `active` named scope (narrowing the base result set)
 - Filters to published posts only
 - Sorts newest first
 - Eager loads user and comments

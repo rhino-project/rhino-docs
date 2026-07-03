@@ -107,6 +107,10 @@ When an organization is present in the request context (set by middleware in the
 3. **`owner` chain is configured / auto-detected** -- Rhino walks the foreign-key relation(s) named by `owner` to find a model with `organizationId` and filters via a nested relation condition
 4. **No relationship found** -- model is global (no scope applied)
 
+:::info Two kinds of "scope"
+This step (plus any always-on `scopes: [...]` classes) is the **enforced** scope layer — it runs on every request and no query parameter can bypass it. It is distinct from a **client-selected named scope** (`?scope=name`), applied during **Query Execution** below. A named scope is ANDed *after* organization scoping and can only **narrow** the authorized set, never widen it.
+:::
+
 ### 8. Validation
 
 For `store` and `update` actions, the controller resolves permitted fields from the policy (`permittedAttributesForCreate` or `permittedAttributesForUpdate`), checks for forbidden fields (returns 403), then runs Zod validation against the registration's schema (`validation` / `validationStore` / `validationUpdate`). If validation fails, a 422 response is returned with the error details:
@@ -124,12 +128,15 @@ For `store` and `update` actions, the controller resolves permitted fields from 
 
 The `QueryBuilderService` translates URL query parameters into Prisma operations:
 
-1. Filters -- `?filter[status]=published`
-2. Sorts -- `?sort=-createdAt,title`
-3. Search -- `?search=nestjs`
-4. Includes -- `?include=author,comments`
-5. Field selection -- `?fields[posts]=id,title`
-6. Pagination -- `?page=1&per_page=20`
+1. Scope selection -- `?scope=availableForDrivers`
+2. Filters -- `?filter[status]=published`
+3. Sorts -- `?sort=-createdAt,title`
+4. Search -- `?search=nestjs`
+5. Includes -- `?include=author,comments`
+6. Field selection -- `?fields[posts]=id,title`
+7. Pagination -- `?page=1&per_page=20`
+
+Scope selection resolves the `?scope=` value against the registration's `namedScopes` (falling back to `defaultScope` when absent) and ANDs the scope's where-fragment into the query. A non-whitelisted name returns a **403** — unlike filters/sorts, it is not silently ignored. See [Querying — Named Scopes](./querying#named-scopes).
 
 ### 10. Response
 

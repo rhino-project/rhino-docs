@@ -32,6 +32,7 @@ In Rhino for NestJS:
 | 11 | **Pagination** | `?page=N&per_page=N`. Metadata in headers (`X-Current-Page`, `X-Last-Page`, `X-Per-Page`, `X-Total`). `per_page` clamped 1–100. |
 | 12 | **Field Selection** | `?fields[posts]=id,title,status`. |
 | 13 | **Eager Loading** | `?include=author,comments` with nested support (`comments.user`). `commentsCount` / `commentsExists` suffixes. Per-include authorization. |
+| 13b | **Named Scopes** | Client selects a model-whitelisted scope via `?scope=name`. `namedScopes: { availableForDrivers: Scope, active: Scope }` + `defaultScope: 'active'`. Each `RhinoNamedScope.apply(ctx)` returns a Prisma where-fragment (ANDed in); `ctx.user` server-resolved. No `?scope` → default applies. Non-whitelisted name → **403** (`RhinoException` envelope, not silently ignored). Index + trashed only, not show. Narrows the authorized/org-scoped set only. |
 | 14 | **Multi-Tenancy** | Organization isolation via `belongsToOrganization: true`. Auto-sets `organizationId`, scopes queries. Route-prefix or subdomain resolution. |
 | 15 | **Nested Ownership** | Models without a direct `organizationId` are scoped by walking the `owner` relation chain (e.g., Comment → Post → Organization). |
 | 16 | **Route Groups** | Multiple URL prefixes with different middleware/auth, optionally constrained to a host via per-group `domain` (literal or `{organization}.example.com`). Reserved names: `tenant` and `public`. Opt-in per-group `auth` and `hooks`. |
@@ -309,7 +310,9 @@ A model = a Prisma model + a `ModelRegistration`. Define behaviors as plain fiel
 | `additionalHiddenColumns` | `string[]` | `[]` | Extra columns always hidden. |
 | `auditExclude` | `string[]` | `[]` | Fields excluded from audit snapshots. |
 | `computedAttributes` | `(record, user) => Record<string, any>` | — | Virtual attributes (merged before policy filtering). |
-| `scopes` | `Type<RhinoScope>[]` | `[]` | Custom scope classes. |
+| `scopes` | `Type<RhinoScope>[]` | `[]` | Custom scope classes (always-on). |
+| `namedScopes` | `Record<string, Type<RhinoNamedScope>>` | `{}` | Client-selectable scopes via `?scope=name`. Each `apply(ctx)` returns a Prisma where-fragment. Non-whitelisted → 403. |
+| `defaultScope` | `string` | — | Named scope applied when no `?scope=` given (e.g. `'active'`); listing convenience, not a security boundary. |
 | `owner` | `string` | — | Parent relation for nested-ownership scoping. |
 | `fkConstraints` | `Array<{ field, model }>` | — | FKs verified against the current org. |
 | `middleware` | `Type<NestMiddleware>[]` | `[]` | Middleware for all routes of this model. |
@@ -684,6 +687,48 @@ GET /api/posts?include=commentsExists       # boolean
 ```
 
 Include authorization: Rhino checks `viewAny` on each included resource (403 if denied).
+
+### Named Scopes
+
+Client selects a model-whitelisted named scope via `?scope=name`. Register with `namedScopes` + `defaultScope`. Each scope implements `RhinoNamedScope` and returns a Prisma where-fragment (Rhino ANDs it in). Joins are expressed as nested relation filters (`some`/`none`/`is`). `RhinoNamedScope` and `ScopeContext` are exported from the package root.
+
+```ts
+// src/scopes/AvailableForDriversScope.ts
+import type { RhinoNamedScope, ScopeContext } from '@rhino-dev/rhino-nestjs';
+
+export class AvailableForDriversScope implements RhinoNamedScope {
+  apply(ctx: ScopeContext): Record<string, any> {
+    if (!ctx.user) return { id: { in: [] } }; // fail closed
+    return {
+      status: 'active',
+      assignments: { none: { completedAt: null } },
+      region: { driverQualifications: { some: { driverId: ctx.user.id, expiresAt: { gt: new Date() } } } },
+    };
+  }
+}
+```
+
+```ts
+routes: {
+  model: 'route',
+  namedScopes: { availableForDrivers: AvailableForDriversScope, active: ActiveScope },
+  defaultScope: 'active',
+},
+```
+
+```bash
+GET /api/routes?scope=availableForDrivers   # applies the named scope
+GET /api/routes                             # no ?scope → defaultScope ('active') applied
+GET /api/routes?scope=archived              # → 403 { "code", "message": "Scope 'archived' is not allowed", "details" }
+```
+
+Rules:
+- Non-whitelisted/unknown name → **403** via the `RhinoException` envelope `{code, message, details}` (NOT silently ignored — unlike filters/sorts). Mirrors include-authorization.
+- `ctx.user` is the current authenticated user, server-resolved — the client never sends identity.
+- Requesting the declared default by name is always allowed.
+- Applies to the **index** and **trashed** listings. `show` is NOT scoped.
+- Composes with filter/sort/search/fields/include/pagination and with org/authorization scoping — a named scope can only **narrow**, never widen, the authorized set.
+- `defaultScope` is a listing convenience, **not** a security boundary — selecting another scope replaces it. Put mandatory row restrictions (tenancy, visibility) in `belongsToOrganization` or an always-on `scopes: [...]` class, never `defaultScope`. "Scope" is overloaded: `namedScopes` SELECT a client-chosen subset; `scopes` ENFORCE one (always on).
 
 ### Combined
 

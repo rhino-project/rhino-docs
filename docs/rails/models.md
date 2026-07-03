@@ -94,6 +94,10 @@ class Post < Rhino::RhinoModel
   rhino_includes  :user, :comments, :tags
   rhino_search    :title, :content
 
+  # ── Named Scopes ─────────────────────────────────────────────
+  rhino_scopes :active, available_for_drivers: Scopes::AvailableForDriversScope
+  rhino_default_scope :active
+
   # ── Pagination ───────────────────────────────────────────────
   rhino_pagination_enabled true
   rhino_per_page 25
@@ -126,6 +130,8 @@ end
 | `rhino_fields` | `*symbols` | Fields that can be selected via sparse fieldsets (`?fields[model]=field1,field2`). Limits which columns are returned. |
 | `rhino_includes` | `*symbols` | Relationships that can be eager-loaded via `?include=relation`. Must correspond to defined ActiveRecord associations on the model. |
 | `rhino_search` | `*symbols/strings` | Fields searched when `?search=term` is used. Rhino performs a case-insensitive `LIKE` search across all listed fields. Supports dot-notation for relationships (e.g., `'user.name'`). |
+| `rhino_scopes` | `*symbols`, `**hash` | Named scopes selectable via `?scope=name`. A bare symbol references a plain AR scope; a `name: ScopeClass` pair points at a `Rhino::ResourceScope` subclass. Wire names are camelCase (`?scope=availableForDrivers`). Non-whitelisted names return `403`. See [Querying — Named Scopes](./querying#named-scopes). |
+| `rhino_default_scope` | `symbol` | Named scope applied automatically when no `?scope=` is provided (e.g., `:active`). A listing convenience — not a security boundary; mandatory restrictions belong in a global scope. Requesting it by name is always allowed. |
 | `rhino_pagination_enabled` | `bool` | Enables or disables pagination for the index endpoint. Defaults to `false`. |
 | `rhino_per_page` | `integer` | Number of records per page when pagination is enabled. Defaults to `25`. |
 | `rhino_middleware` | `*strings` | Middleware applied to **all** routes for this model. |

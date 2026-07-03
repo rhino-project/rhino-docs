@@ -111,6 +111,10 @@ class Post extends RhinoModel
     public static $allowedIncludes = ['user', 'comments', 'tags'];
     public static $allowedSearch   = ['title', 'content'];
 
+    // ── Named Scopes ─────────────────────────────────────────────
+    public static $allowedScopes   = ['availableForDrivers'];
+    public static $defaultScope    = 'active';
+
     // ── Pagination ───────────────────────────────────────────────
     public static bool $paginationEnabled = true;
     protected $perPage = 25;
@@ -139,6 +143,8 @@ class Post extends RhinoModel
 | `$allowedFields` | `array` | Fields that can be selected via sparse fieldsets (`?fields[model]=field1,field2`). Limits which columns are returned. |
 | `$allowedIncludes` | `array` | Relationships that can be eager-loaded via `?include=relation`. Must correspond to defined Eloquent relationships on the model. |
 | `$allowedSearch` | `array` | Fields searched when `?search=term` is used. Rhino performs a case-insensitive `LIKE` search across all listed fields. |
+| `$allowedScopes` | `array` | Named query scopes the client may select via `?scope=name`. Each must have a matching `scope{Name}(Builder $query, ?Authenticatable $user)` method. Non-whitelisted names return `403`. See [Querying — Named Scopes](./querying#named-scopes). |
+| `$defaultScope` | `string` | Named scope applied automatically when no `?scope=` is provided (e.g., `'active'`). A listing convenience — not a security boundary; mandatory restrictions belong in a global scope. Requesting it by name is always allowed. |
 | `$paginationEnabled` | `bool` | Enables or disables pagination for the index endpoint. Defaults to `true`. |
 | `$perPage` | `int` | Number of records per page when pagination is enabled. Standard Eloquent property. |
 | `$middleware` | `array` | Middleware applied to **all** routes for this model. |

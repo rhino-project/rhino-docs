@@ -90,6 +90,7 @@ Or keep reading for the architecture overview and a Hello World example.
 - **Invitation System** — invite users to organizations with role assignment
 - **Blueprint Generator** — define permissions in YAML, generate fully working policies, tests, and seeders deterministically
 - **Query Builder** — filters, sorts, search, pagination, includes, field selection
+- **Named Scopes** — clients select a model-whitelisted `?scope=` (with a model-declared default); available on Laravel, Rails, and NestJS
 - **React Native Support** — same hooks with platform-adapted storage and networking
 
 ## Quick Install

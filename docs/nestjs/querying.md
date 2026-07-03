@@ -131,6 +131,114 @@ GET /api/posts?search=nestjs&filter[status]=published
 ```
 :::
 
+## Named Scopes
+
+Named scopes let the client **select** a model-whitelisted query scope by name via `?scope=`. Unlike filters and sorts (which the client composes freely from allowed columns), a named scope is a reusable, server-defined query fragment -- ideal for complex relation filters or user-specific constraints you do not want to express in the URL.
+
+Register the whitelist and a default on the model registration with `namedScopes` and `defaultScope`:
+
+```ts title="src/rhino.config.ts"
+import { AvailableForDriversScope } from './scopes/AvailableForDriversScope';
+import { ActiveScope } from './scopes/ActiveScope';
+
+routes: {
+  model: 'route',
+
+  // Scopes the client may select by name via ?scope=
+  namedScopes: {
+    availableForDrivers: AvailableForDriversScope,
+    active: ActiveScope,
+  },
+
+  // Applied automatically when no ?scope= is given
+  defaultScope: 'active',
+},
+```
+
+Each scope class implements `RhinoNamedScope` and returns a Prisma **where-fragment** that Rhino ANDs into the query. Joins are expressed as nested relation filters (`some` / `none` / `is`):
+
+```ts title="src/scopes/AvailableForDriversScope.ts"
+import type { RhinoNamedScope, ScopeContext } from '@rhino-dev/rhino-nestjs';
+
+export class AvailableForDriversScope implements RhinoNamedScope {
+  apply(ctx: ScopeContext): Record<string, any> {
+    if (!ctx.user) return { id: { in: [] } }; // fail closed when unauthenticated
+    return {
+      status: 'active',
+      assignments: { none: { completedAt: null } },
+      region: {
+        driverQualifications: {
+          some: { driverId: ctx.user.id, expiresAt: { gt: new Date() } },
+        },
+      },
+    };
+  }
+}
+```
+
+`RhinoNamedScope` and `ScopeContext` are exported from the package root (`@rhino-dev/rhino-nestjs`). The context's `user` is the **current authenticated user**, resolved server-side -- the client never sends user identity, only the scope name. Always fail closed (`{ id: { in: [] } }`) when `ctx.user` is absent.
+
+### Selecting a scope
+
+```bash title="terminal"
+# Apply the availableForDrivers scope
+GET /api/routes?scope=availableForDrivers
+
+# No ?scope= -> the model's defaultScope ('active') is applied automatically
+GET /api/routes
+```
+
+### Try it with curl
+
+The client only sends a bearer token and a scope name; the `ScopeContext` (current user, organization) is resolved server-side and passed to the scope's `apply(ctx)`:
+
+```bash title="terminal"
+# Authenticate — Rhino returns a bearer token
+TOKEN=$(curl -s -X POST http://localhost:3000/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"driver@example.com","password":"password"}' | jq -r .token)
+
+# No ?scope= -> the model's defaultScope ('active') is applied automatically
+curl -s http://localhost:3000/api/routes \
+  -H "Authorization: Bearer $TOKEN"
+# → { "data": [ /* only active routes */ ], "pagination": { ... } }
+
+# Select the availableForDrivers scope
+curl -s "http://localhost:3000/api/routes?scope=availableForDrivers" \
+  -H "Authorization: Bearer $TOKEN"
+# → { "data": [ /* only the routes THIS driver may take */ ], "pagination": { ... } }
+```
+
+Log in as a different driver and the same URL returns a different set — `AssignedToMeScope.apply(ctx)` reads `ctx.user.id`, so no per-user query has to live in the client.
+
+### The 403 contract
+
+Unlike filters and sorts, an unknown or non-whitelisted scope name is **not** silently ignored -- it returns a `403` using the standard `RhinoException` envelope, mirroring the [include-authorization](#include-authorization) behavior:
+
+```bash title="terminal"
+# 'archived' is not in namedScopes:
+GET /api/routes?scope=archived
+# 403 { "code": "FORBIDDEN", "message": "Scope 'archived' is not allowed", "details": {} }
+```
+
+Requesting the declared default scope by name (`?scope=active`) is always allowed.
+
+:::warning The default scope is a convenience, not a security boundary
+`defaultScope` is a listing default that a client **replaces** the moment it selects another scope. Do **not** put mandatory row restrictions (tenancy, visibility) in it -- those belong in an always-on layer (`belongsToOrganization`, or a custom `scopes: [...]` class), which no `?scope=` value can bypass. Note the two meanings of "scope" in Rhino for NestJS: a **named scope** (`namedScopes`) *selects* a client-chosen subset, while a **custom scope** (`scopes`) *enforces* a subset on every query.
+
+A named scope can only **narrow** the already-authorized, organization-scoped set -- it is ANDed on top of global scoping and can never widen it.
+:::
+
+### Composition and where it applies
+
+Named scopes compose with everything else -- `filter`, `sort`, `search`, `fields`, `include`, and pagination all apply on top of the selected scope:
+
+```bash title="terminal"
+GET /api/routes?scope=availableForDrivers&sort=-createdAt&include=region&page=1&per_page=20
+```
+
+Scoping applies to the **index** listing and the **trashed** (soft-delete) listing. A single-record `show` is **not** scoped.
+
 ## Pagination
 
 Control page size and navigate through results:
@@ -277,10 +385,11 @@ This applies to all includes, including nested ones. A request like `?include=co
 ## Combined Example
 
 ```bash title="terminal"
-GET /api/posts?filter[status]=published&sort=-created_at&include=user,comments&fields[posts]=id,title,excerpt&search=nestjs&page=1&per_page=20
+GET /api/posts?scope=active&filter[status]=published&sort=-created_at&include=user,comments&fields[posts]=id,title,excerpt&search=nestjs&page=1&per_page=20
 ```
 
 This single request:
+- Selects the `active` named scope (narrowing the base result set)
 - Filters to published posts only
 - Sorts newest first
 - Eager loads user and comments

@@ -75,8 +75,12 @@ models: {
     belongsToOrganization: true,
     hasAuditTrail: true,
 
-    // -- Custom scopes --
+    // -- Custom scopes (always-on) --
     scopes: [PublishedScope],
+
+    // -- Named scopes (client-selected via ?scope=) --
+    namedScopes: { availableForDrivers: AvailableForDriversScope, active: ActiveScope },
+    defaultScope: 'active',
 
     // -- Middleware --
     actionMiddleware: { store: [VerifiedMiddleware] },
@@ -111,7 +115,9 @@ models: {
 | `additionalHiddenColumns` | `string[]` | `[]` | Extra columns always hidden from responses for this model. |
 | `auditExclude` | `string[]` | `[]` | Fields excluded from audit-log snapshots. |
 | `computedAttributes` | `(record, user) => Record<string, any>` | — | Virtual attributes merged into responses (before policy filtering). |
-| `scopes` | `Type<RhinoScope>[]` | `[]` | Custom scope classes applied to every query. |
+| `scopes` | `Type<RhinoScope>[]` | `[]` | Custom scope classes applied to **every** query (always-on). |
+| `namedScopes` | `Record<string, Type<RhinoNamedScope>>` | `{}` | Named scopes the client may **select** via `?scope=name`. Each `RhinoNamedScope.apply(ctx)` returns a Prisma where-fragment ANDed into the query. Non-whitelisted names return `403`. See [Querying — Named Scopes](./querying#named-scopes). |
+| `defaultScope` | `string` | — | Named scope applied automatically when no `?scope=` is provided (e.g., `'active'`). A listing convenience — not a security boundary; mandatory restrictions belong in `scopes`/`belongsToOrganization`. Requesting it by name is always allowed. |
 | `owner` | `string` | — | Parent relation/FK used for nested-ownership scoping of child resources. |
 | `fkConstraints` | `Array<{ field, model }>` | — | Foreign keys verified against the current organization. |
 | `middleware` | `Type<NestMiddleware>[]` | `[]` | NestJS middleware applied to **all** routes for this model. |
@@ -223,6 +229,39 @@ posts: {
   scopes: [PublishedScope],
 },
 ```
+
+### Named scopes
+
+`scopes` are **always-on** (enforced on every query). `namedScopes` are the opposite: the **client selects** one by name via `?scope=name`, choosing from a model-declared whitelist. Register them with `namedScopes` and `defaultScope`; each scope class implements `RhinoNamedScope` and returns a Prisma where-fragment that Rhino ANDs into the query.
+
+```ts title="src/scopes/AvailableForDriversScope.ts"
+import type { RhinoNamedScope, ScopeContext } from '@rhino-dev/rhino-nestjs';
+
+export class AvailableForDriversScope implements RhinoNamedScope {
+  apply(ctx: ScopeContext): Record<string, any> {
+    if (!ctx.user) return { id: { in: [] } }; // fail closed
+    return {
+      status: 'active',
+      assignments: { none: { completedAt: null } },
+      region: {
+        driverQualifications: {
+          some: { driverId: ctx.user.id, expiresAt: { gt: new Date() } },
+        },
+      },
+    };
+  }
+}
+```
+
+```ts title="src/rhino.config.ts"
+routes: {
+  model: 'route',
+  namedScopes: { availableForDrivers: AvailableForDriversScope, active: ActiveScope },
+  defaultScope: 'active',
+},
+```
+
+The scope receives the current authenticated user via `ctx.user` (server-resolved). A non-whitelisted `?scope=` returns `403`; when no `?scope=` is given, `defaultScope` applies. See [Querying — Named Scopes](./querying#named-scopes) for the full contract.
 
 ### Organization scoping
 
