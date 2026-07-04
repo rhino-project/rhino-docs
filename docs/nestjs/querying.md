@@ -188,28 +188,123 @@ GET /api/routes?scope=availableForDrivers
 GET /api/routes
 ```
 
-### Try it with curl
+### Best practices for complex scopes
 
-The client only sends a bearer token and a scope name; the `ScopeContext` (current user, organization) is resolved server-side and passed to the scope's `apply(ctx)`:
+The inline example above fits on a screen. Once a scope grows past a couple of clauses -- relation joins, subqueries, per-user or per-role logic -- move it into its own class instead of inlining a growing object literal. The patterns below keep a named scope safe, cheap, and testable.
 
-```bash title="terminal"
-# Authenticate — Rhino returns a bearer token
-TOKEN=$(curl -s -X POST http://localhost:3000/api/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"email":"driver@example.com","password":"password"}' | jq -r .token)
+#### Put it in a scope class, not a service
 
-# No ?scope= -> the model's defaultScope ('active') is applied automatically
-curl -s http://localhost:3000/api/routes \
-  -H "Authorization: Bearer $TOKEN"
-# → { "data": [ /* only active routes */ ], "pagination": { ... } }
+A named scope is a **pure query transformation**: given a `ScopeContext`, it returns a Prisma where-fragment that Rhino ANDs into the query. It is not a place for business logic or side effects. Give each scope its own class implementing `RhinoNamedScope`, keep them together under `src/scopes/`, and let the model registration point at the class -- that line stays thin:
 
-# Select the availableForDrivers scope
-curl -s "http://localhost:3000/api/routes?scope=availableForDrivers" \
-  -H "Authorization: Bearer $TOKEN"
-# → { "data": [ /* only the routes THIS driver may take */ ], "pagination": { ... } }
+```ts title="src/rhino.config.ts"
+namedScopes: { availableForDrivers: AvailableForDriversScope },
 ```
 
-Log in as a different driver and the same URL returns a different set — `AssignedToMeScope.apply(ctx)` reads `ctx.user.id`, so no per-user query has to live in the client.
+```ts title="src/scopes/AvailableForDriversScope.ts"
+import type { RhinoNamedScope, ScopeContext } from '@rhino-dev/rhino-nestjs';
+
+export class AvailableForDriversScope implements RhinoNamedScope {
+  apply(ctx: ScopeContext): Record<string, any> {
+    if (!ctx.user) return { id: { in: [] } }; // fail closed
+
+    return {
+      status: 'active',
+      // no open assignment blocking the route
+      assignments: { none: { completedAt: null } },
+      // driver holds a current qualification for the route's region
+      region: {
+        driverQualifications: {
+          some: { driverId: ctx.user.id, expiresAt: { gt: new Date() } },
+        },
+      },
+    };
+  }
+}
+```
+
+#### Derive from what Rhino hands you -- never a fresh model query
+
+A named scope returns a **fragment**; Rhino ANDs it into the where it has already built (org scoping, global scopes, soft-delete, filters). That is exactly why the fragment shape is safe. The danger is stepping outside it -- reaching for `prisma.route.findMany(...)` inside the scope and returning ids from a query that starts fresh:
+
+```ts
+// BAD — starts from a fresh model query; drops org scoping → tenant data leak
+const ids = await prisma.route.findMany({ where: { status: 'active' } });
+return { id: { in: ids.map((r) => r.id) } };
+
+// GOOD — return a narrowing fragment; Rhino ANDs it onto the already-scoped where
+return { status: 'active', region: { driverQualifications: { some: { driverId: ctx.user.id } } } };
+```
+
+The fragment form runs *on top of* the organization scope. The fresh-query form silently discards it -- a tenant-isolated list becomes a data leak.
+
+#### Fail closed when there is no user
+
+If the scope depends on the current user, return an empty set when `ctx.user` is absent -- never the full set:
+
+```ts
+if (!ctx.user) return { id: { in: [] } };
+```
+
+`{ id: { in: [] } }` matches no rows. Returning `{}` (or nothing) would match *every* row the outer query allows -- the opposite of what a user-scoped view should do when identity is missing.
+
+#### Prefer relation predicates over raw joins
+
+Express joins as nested relation filters (`some` / `none` / `is`), not by hand-rolling `$queryRaw` joins. A raw join fans out rows: one route with three matching qualifications becomes three rows, which double-counts under pagination and makes `?sort` ambiguous. Relation predicates stay row-per-parent:
+
+```ts
+// one row per route, regardless of how many qualifications match
+region: { driverQualifications: { some: { driverId: ctx.user.id } } }
+```
+
+:::warning
+If you ever do fall back to a join that needs `distinct`, do **not** combine that scope with `?fields[...]` -- a `COUNT(DISTINCT ...)` interaction can miscount the paginated total. Add DB indexes on the predicate columns you filter through (`driverQualifications.driverId`, `expiresAt`) so the `some` / `none` subquery stays cheap.
+:::
+
+#### A named scope only narrows, never widens
+
+A named scope is ANDed on top of org scoping and global scopes -- it can only *narrow* the already-authorized set, never widen it. Do **not** put mandatory restrictions (tenancy, visibility) in a named scope: a client swaps the scope out the moment it sends a different `?scope=`. Those restrictions belong in an always-on global scope (`belongsToOrganization` or a custom `scopes: [...]` class). See [the default scope is not a security boundary](#the-403-contract) below.
+
+#### Offload external or expensive work to a service
+
+The scope's `apply` runs on **every** list request, so it must stay a cheap, pure transform. If deciding the set needs an API call, a permission-graph lookup, or heavy computation, push that into a service that returns raw material -- a set of ids or a subquery shape -- cache it, and have the scope apply the result:
+
+```ts title="src/scopes/AssignedToMeScope.ts"
+export class AssignedToMeScope implements RhinoNamedScope {
+  constructor(private readonly routes: RouteAccessService) {}
+
+  apply(ctx: ScopeContext): Record<string, any> {
+    if (!ctx.user) return { id: { in: [] } };
+    // service does the expensive/cached lookup; scope just applies ids
+    const ids = this.routes.accessibleRouteIds(ctx.user.id); // memoized/cached
+    return { id: { in: ids } };
+  }
+}
+```
+
+The expensive lookup lives (and is cached) in the service; the thing that runs per request is a plain `{ id: { in: [...] } }` fragment.
+
+:::note `apply` is synchronous
+`apply(ctx)` returns a plain object — Rhino ANDs the fragment into the query without awaiting it, so you cannot `await` inside a scope. The service accessor must therefore return synchronously (a read from an already-warmed cache/store). Do any async work — the API call, the DB round-trip — upstream (e.g. in a guard or middleware) and memoize it, so the scope only reads the result.
+:::
+
+#### Test the class in isolation
+
+Because a scope is a plain class, unit-test `apply` directly with a stubbed context -- no HTTP, no Prisma round-trip:
+
+```ts title="src/scopes/AvailableForDriversScope.spec.ts"
+it('fails closed without a user', () => {
+  expect(new AvailableForDriversScope().apply({})).toEqual({ id: { in: [] } });
+});
+
+it('scopes to the current driver', () => {
+  const frag = new AvailableForDriversScope().apply({ user: { id: 7 } });
+  expect(frag.region.driverQualifications.some.driverId).toBe(7);
+});
+```
+
+:::tip
+Assert on the returned fragment shape, not on database rows. The whole point of the fragment contract is that you can verify the scope's logic without a database -- the AND-into-the-query behavior is Rhino's job, already covered by its own tests.
+:::
 
 ### The 403 contract
 

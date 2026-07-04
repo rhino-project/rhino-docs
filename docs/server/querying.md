@@ -160,28 +160,90 @@ GET /api/routes?scope=availableForDrivers
 GET /api/routes
 ```
 
-### Try it with curl
+### Best practices for complex scopes
 
-A full run against a live server. The client only ever sends a bearer token and a scope *name* — the joins and the current-driver filter are resolved server-side:
+Once a scope grows past a couple of clauses — joins, subqueries, per-user or per-role logic — move it out of the model into its own class. These are the rules that keep a complex named scope correct and safe.
 
-```bash title="terminal"
-# Authenticate — Rhino returns a bearer token
-TOKEN=$(curl -s -X POST http://localhost:8000/api/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"email":"driver@example.com","password":"password"}' | jq -r .token)
+**1. Put it in a scope class, not a service.** A scope is a pure query transformation: `(query, user) -> narrowed query`. The framework only invokes real local scopes (`hasNamedScope` gates `?scope=`), so keep a one-line `scopeXxx` on the model that delegates to an invokable class in `app/Models/Scopes/`:
 
-# No ?scope= → the model's $defaultScope ('active') is applied automatically
-curl -s http://localhost:8000/api/routes \
-  -H "Authorization: Bearer $TOKEN"
-# → { "data": [ /* only 'active' routes */ ] }
-
-# Select the availableForDrivers scope
-curl -s "http://localhost:8000/api/routes?scope=availableForDrivers" \
-  -H "Authorization: Bearer $TOKEN"
-# → { "data": [ /* only the routes THIS driver may take */ ] }
+```php title="app/Models/Route.php"
+public function scopeAvailableForDrivers(Builder $query, ?Authenticatable $user): Builder
+{
+    return (new AvailableForDriversScope)($query, $user);
+}
 ```
 
-Log in as a different driver and the same `?scope=availableForDrivers` URL returns a different set — the scope reads the authenticated user, so no per-user query has to live in the client.
+```php title="app/Models/Scopes/AvailableForDriversScope.php"
+namespace App\Models\Scopes;
+
+class AvailableForDriversScope
+{
+    public function __invoke(Builder $query, ?Authenticatable $user): Builder
+    {
+        if (! $user) {
+            return $query->whereRaw('1 = 0'); // fail closed
+        }
+
+        return $query
+            ->where('status', 'active')
+            ->whereDoesntHave('assignments', fn ($q) => $q->whereNull('completed_at'))
+            ->whereHas('region.driverQualifications', fn ($q) => $q
+                ->where('driver_id', $user->id)
+                ->where('expires_at', '>', now()));
+    }
+}
+```
+
+The `scopeXxx` method stays thin — one line of delegation — so `?scope=availableForDrivers` still resolves, while the real logic lives in a testable class.
+
+**2. Always derive from the query you are handed** — never start from a fresh model query. `$query` already carries the organization scope and every other global scope; `Route::query()` does not (global scopes bypassed from within package internals). Starting fresh silently turns a tenant-isolated list into a data leak.
+
+```php title="app/Models/Scopes/AvailableForDriversScope.php"
+// GOOD — narrows the org-scoped query you were given
+return $query->where('status', 'active');
+
+// BAD — drops org scoping; leaks other tenants' rows
+return Route::query()->where('status', 'active');
+```
+
+**3. Fail closed when there is no user.** Return an empty set (`whereRaw('1 = 0')`), never the full set — an unauthenticated caller should see nothing, not everything.
+
+**4. Prefer relation predicates over raw joins.** A raw `join()` duplicates rows under `paginate()` and makes `?sort` ambiguous; use `whereHas`/`whereExists` (as above) so counts and ordering stay correct. If you must use `distinct`, do not combine the scope with `?fields` (the resulting `COUNT(DISTINCT ...)` breaks under column selection). Add DB indexes for the columns your predicates filter on (`driver_id`, `expires_at`, `completed_at`).
+
+:::warning A named scope only narrows — never widens
+It runs **on top of** organization scoping and every global scope, so it can only shrink the already-authorized set. Do **not** put mandatory restrictions (tenancy, visibility) in a named scope — a client drops it the moment they select another `?scope=`. Those belong in an always-on global scope. See [the default scope is not a security boundary](#the-403-contract) below.
+:::
+
+**5. Offload external or expensive work to a service the scope calls.** If the scope needs an API call, a permission-graph lookup, or heavy computation, put that in a service that returns *raw material* — a set of ids or a subquery — cache it, and have the scope apply it. That keeps the thing that runs on every list request a cheap, pure query transform:
+
+```php title="app/Models/Scopes/AvailableForDriversScope.php"
+public function __invoke(Builder $query, ?Authenticatable $user): Builder
+{
+    if (! $user) {
+        return $query->whereRaw('1 = 0');
+    }
+
+    // Service does the expensive lookup once, cached; scope just applies the ids
+    $regionIds = app(DriverEligibility::class)->eligibleRegionIds($user);
+
+    return $query->where('status', 'active')->whereIn('region_id', $regionIds);
+}
+```
+
+**6. Test the class in isolation.** Because it is a plain class, unit-test `__invoke` with a stubbed user and a query builder — no HTTP round-trip needed:
+
+```php title="tests/Unit/AvailableForDriversScopeTest.php"
+public function test_unauthenticated_sees_nothing(): void
+{
+    $sql = (new AvailableForDriversScope)(Route::query(), null)->toSql();
+
+    $this->assertStringContainsString('1 = 0', $sql);
+}
+```
+
+:::tip
+The one-line `scopeXxx` on the model is all the wiring the framework needs; everything else is an ordinary, unit-testable class you own.
+:::
 
 ### The 403 contract
 

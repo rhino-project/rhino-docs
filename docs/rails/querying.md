@@ -171,28 +171,99 @@ GET /api/routes?scope=availableForDrivers
 GET /api/routes
 ```
 
-### Try it with curl
+### Best practices for complex scopes
 
-The camelCase name (`availableForDrivers`) is underscored server-side to the `available_for_drivers` scope. The client only sends a bearer token and the scope name:
+Once a scope grows past a couple of clauses — joins, subqueries, per-user or per-role logic — move it out of the model and into its own class. A scope is a pure query transformation: `(relation, context) -> narrowed relation`, and keeping it that way is what makes it safe to run on every list request.
 
-```bash title="terminal"
-# Authenticate — Rhino returns a bearer token
-TOKEN=$(curl -s -X POST http://localhost:3000/api/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"email":"driver@example.com","password":"password"}' | jq -r .token)
+#### Put it in a scope class, not a service
 
-# No ?scope= → the model's rhino_default_scope (:active) is applied automatically
-curl -s http://localhost:3000/api/routes \
-  -H "Authorization: Bearer $TOKEN"
-# → { "data": [ /* only active routes */ ] }
+A complex scope is a `Rhino::ResourceScope` subclass in `app/models/scopes/`, implementing `apply(relation)`. The whitelist entry on the model points at the class — keep that line thin:
 
-# Select the availableForDrivers scope
-curl -s "http://localhost:3000/api/routes?scope=availableForDrivers" \
-  -H "Authorization: Bearer $TOKEN"
-# → { "data": [ /* only the routes THIS driver may take */ ] }
+```ruby title="app/models/route.rb"
+rhino_scopes available_for_drivers: Scopes::AvailableForDriversScope
 ```
 
-Log in as a different driver and the same URL returns a different set — the scope reads `RequestStore[:rhino_current_user]`, so no per-user query has to live in the client.
+```ruby title="app/models/scopes/available_for_drivers_scope.rb"
+module Scopes
+  class AvailableForDriversScope < Rhino::ResourceScope
+    def apply(relation)
+      return relation.none unless user
+
+      relation
+        .where(status: "active")
+        .where(
+          region_id: Region.joins(:driver_qualifications).where(
+            driver_qualifications: { driver_id: user.id }
+          ).where("driver_qualifications.expires_at > ?", Time.current)
+        )
+    end
+  end
+end
+```
+
+`user`, `organization`, and `role` come from the base class (backed by `RequestStore`) — the client never sends user identity, only the scope name.
+
+:::warning Do not name the class `Scopes::<ModelName>Scope`
+That exact name (e.g. `Scopes::RouteScope` for `Route`) is auto-discovered by `HasAutoScope` (see [Models](./models#hasautoscope)) and applied as an **always-on global scope** on *every* query. Name a named-scope class for its purpose — `AvailableForDriversScope`, not `RouteScope`.
+:::
+
+#### Always derive from the relation you are handed
+
+`apply` receives a `relation` that already carries organization scoping and every global scope. Narrow *that* — never start from a fresh `Model.where(...)`. A fresh query silently drops tenant isolation, turning a scoped list into a data leak:
+
+```ruby title="apply(relation)"
+# Good — builds on the org-scoped, globally-scoped relation
+relation.where(status: "active")
+
+# Bad — starts fresh, drops org scoping → cross-tenant leak
+Route.where(status: "active")
+```
+
+#### Fail closed when there is no user
+
+When `user` is nil, return `relation.none` — an empty set, never the full relation. A user-specific scope with no user must resolve to *nothing*, not *everything*.
+
+```ruby title="apply(relation)"
+return relation.none unless user
+```
+
+#### Prefer relation predicates over raw joins
+
+A raw `joins` against a has-many duplicates parent rows, which breaks pagination counts and makes `?sort` ambiguous. Prefer a subquery / `where(id: ...)` predicate (as above) so each parent row appears once. If you genuinely need `joins(...).distinct`, do not combine that scope with `?fields` — `COUNT(DISTINCT ...)` over a projected column set misbehaves. Add DB indexes on the joined predicate columns (`driver_qualifications.driver_id`, `driver_qualifications.expires_at`).
+
+#### A named scope only narrows, never widens
+
+A named scope runs *on top of* organization scoping and every global scope; it can only shrink the already-authorized set. Never put mandatory restrictions — tenancy, visibility — inside a named scope. Those belong in an always-on **global scope** (`BelongsToOrganization`, `HasAutoScope`, or a manual `default_scope`), which no `?scope=` value can bypass. See [the warning below](#the-403-contract): the default scope is a convenience, not a security boundary.
+
+#### Offload external or expensive work to a service
+
+If the scope needs an API call, a permission-graph lookup, or heavy computation, don't do it inline — the scope runs on every list request. Put that work in a service that returns raw material (a set of ids or a subquery), cache it, and have the scope apply the result:
+
+```ruby title="app/models/scopes/visible_projects_scope.rb"
+module Scopes
+  class VisibleProjectsScope < Rhino::ResourceScope
+    def apply(relation)
+      return relation.none unless user
+
+      ids = PermissionGraph.new(user).visible_project_ids # cached inside the service
+      relation.where(id: ids)
+    end
+  end
+end
+```
+
+The scope stays a cheap, pure query transform; the expensive part lives behind a cacheable service.
+
+#### Test the class in isolation
+
+Because it's a plain Ruby class, unit-test `apply` directly with a stubbed user — no HTTP round-trip needed:
+
+```ruby title="spec/models/scopes/available_for_drivers_scope_spec.rb"
+it "returns nothing when there is no user" do
+  allow_any_instance_of(Scopes::AvailableForDriversScope).to receive(:user).and_return(nil)
+  expect(Scopes::AvailableForDriversScope.new.apply(Route.all)).to eq(Route.none)
+end
+```
 
 ### The 403 contract
 
