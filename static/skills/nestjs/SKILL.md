@@ -49,6 +49,7 @@ In Rhino for NestJS:
 | 26 | **Generator CLI** | `npx rhino install` (setup), `npx rhino generate` (scaffold model/policy/scope stub), `npx rhino blueprint`, `npx rhino export-postman`, `npx rhino export-types`. |
 | 27 | **Postman Export** | Auto-generated Postman Collection v2.1 with auth, example bodies, and filter/sort/include variants. |
 | 28 | **Blueprint (YAML Code Generation)** | Define models, columns, relationships, and role-based permissions in YAML. `npx rhino blueprint` generates Prisma fragments, registrations, policies, tests, and seeders. Incremental via manifest tracking. |
+| 29 | **Custom Controllers (resource-scope resolver)** | `ResourceScopeService` gives custom controllers/jobs (dashboards, reports, aggregations — anything beyond CRUD) the SAME tenant-safe base query CRUD uses. Explicit ctx `{ user, organization }`. `scopedWhere(slug, ctx, {namedScope?})` → composed Prisma where (org filter + global scopes); helpers `count`/`aggregate`/`groupBy`/`findMany` inject it (extraWhere AND-ed under, never dropped). **Fails closed**: `belongsToOrganization` model with no `ctx.organization` → throws `RhinoException` 403 `TENANT_CONTEXT_REQUIRED` (opposite of a raw query, which fails open outside a request). Resolver scopes ROWS; still gate each resource with its policy (`viewAny`) for ACCESS. |
 
 ---
 
@@ -807,6 +808,58 @@ Equivalent SQL uses a nested relation condition (`EXISTS (SELECT 1 FROM posts WH
 ### Membership Verification
 
 `ResolveOrganizationMiddleware` checks the membership model (`userOrganizationModel`, default `userRole`) for a row matching the user + org. No match → `404` (avoids leaking org existence).
+
+### Custom Controllers (resource-scope resolver)
+
+CRUD is tenant-safe because org scope + global scopes are applied in ONE place. A hand-written controller (dashboard, report, aggregation, bulk op) bypasses all of it — a raw `prisma.<model>` query fails OPEN outside a request (returns every tenant's rows). Use `ResourceScopeService` to get the SAME base query CRUD uses. Exported from `@rhino-dev/rhino-nestjs` (also exports `type ResourceContext`). Context is always **explicit** — pass `{ user, organization }` (from `req.user`/`req.organization` in a controller, built by hand in a job). Model args are **slugs** (`'task'`, `'project'`) as registered.
+
+```ts
+import { Controller, Get, Req } from '@nestjs/common';
+import { ResourceScopeService, type ResourceContext } from '@rhino-dev/rhino-nestjs';
+
+@Controller(':organization/dashboard')
+export class DashboardController {
+  constructor(private readonly scope: ResourceScopeService) {}
+
+  @Get()
+  async index(@Req() req: any) {
+    const ctx: ResourceContext = { user: req.user, organization: req.organization };
+
+    const totalProjects = await this.scope.count('project', ctx);
+    const openTasks     = await this.scope.count('task', ctx, { status: 'open' });
+    const byStatus      = await this.scope.groupBy('task', ctx, { by: ['status'], _count: { _all: true } });
+
+    // Escape hatch: build any Prisma call on the scoped where
+    const where   = this.scope.scopedWhere('task', ctx);
+    const overdue = await this.prisma.task.count({ where: { AND: [where, { dueAt: { lt: new Date() } }] } });
+
+    return { totalProjects, openTasks, byStatus, overdue };
+  }
+}
+```
+
+**API:**
+
+| Call | Returns |
+|------|---------|
+| `scope.scopedWhere(slug, ctx, { namedScope? })` | composed Prisma `where` (org filter + global scopes [+ whitelisted named scope]) |
+| `scope.count(slug, ctx, extraWhere?)` | `Promise<number>` |
+| `scope.findMany(slug, ctx, args?)` | `Promise<any[]>` |
+| `scope.aggregate(slug, ctx, args)` | `Promise<any>` |
+| `scope.groupBy(slug, ctx, args)` | `Promise<any>` |
+
+Helpers inject the scoped where so a caller cannot forget it; any `extraWhere`/`args.where` is **AND-ed under** the scoped where (never overwrites it).
+
+**Explicit mode** (jobs / commands / scheduled tasks / tests — no request): build `ctx` by hand; org scope comes from the passed org, not a route.
+
+```ts
+const ctx: ResourceContext = { user, organization };
+const stale = await this.scope.findMany('task', ctx, { where: { updatedAt: { lt: cutoff } } });
+```
+
+**Fails closed:** a `belongsToOrganization` model called with no `ctx.organization` **throws** `RhinoException` (`403`, code `TENANT_CONTEXT_REQUIRED`) — the opposite of a raw query, which fails open. A missing org in a job is a bug, not an empty result.
+
+**Rows vs access:** the resolver scopes ROWS; policies authorize ACCESS. Gate each resource the controller reads with its policy, e.g. `if (!new TaskPolicy().viewAny(ctx.user, ctx.organization)) throw new ForbiddenException()` (or `userHasPermission(user, 'task.index', organization)`). Never write raw SQL / raw model queries in a custom controller. Offload expensive/external roll-ups to a cached service, but keep every underlying query going through the resolver.
 
 ---
 

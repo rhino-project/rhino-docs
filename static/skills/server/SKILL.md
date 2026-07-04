@@ -40,6 +40,7 @@ Rhino auto-generates a complete REST API from your model definitions. Here is ev
 | 26 | **Generator CLI** | `rhino:install` (setup), `rhino:generate` (scaffold model/policy/scope), `rhino:export-postman` (API collection), `invitation:link` (test invitations). |
 | 27 | **Postman Export** | Auto-generated Postman Collection v2.1 with all endpoints, auth, example bodies, and filter/sort/include variants. |
 | 28 | **Blueprint (YAML Code Generation)** | Define models, columns, relationships, and role-based permissions in YAML files. `rhino:blueprint` generates models, migrations, factories, policies, tests, and seeders from these definitions. Incremental via manifest tracking. |
+| 29 | **Resource-Scope Resolver (custom controllers)** | `Rhino::query(Model::class)` returns the SAME tenant-scoped + global-scoped Eloquent `Builder` CRUD uses, for dashboards/reports/aggregations. Direct mode (ambient org+user from request); explicit mode `Rhino::forUser($u)->inOrganization($o)->query()`/`->run(fn)` for jobs/commands/tests. Fails CLOSED — throws `MissingTenantContext` with no org (raw queries fail OPEN). Controller trait `InteractsWithRhinoResources`: `$this->scoped()`, `$this->ifCanView()`. Resolver scopes ROWS; policies (`Gate::authorize('viewAny', …)`) authorize ACCESS — do both. |
 
 ---
 
@@ -2733,6 +2734,123 @@ Route::prefix('{organization}/posts')
 
 // Auto-generated routes below...
 ```
+
+---
+
+## 17b. Custom Controllers (Resource-Scope Resolver)
+
+Custom (non-CRUD) controllers — dashboards, reports, aggregations, bulk ops — bypass `GlobalController`'s tenant isolation. **Never** write a raw model query or raw SQL for a tenant-owned model in one. Use the resolver: it returns the SAME org-scoped + global-scoped `Builder` CRUD uses.
+
+Facade: `Rhino\Facades\Rhino`. Exception: `Rhino\Exceptions\MissingTenantContext`.
+
+### Direct mode (inside a tenant request)
+
+Org + user resolved ambiently from the request. Returns a normal Eloquent `Builder`.
+
+```php
+use Rhino\Facades\Rhino;
+
+$base = Rhino::query(Task::class);                         // org-scoped base query
+$open = Rhino::query(Task::class)->where('status', 'open')->count();
+$avail = Rhino::scopedQuery(Task::class, 'availableForDrivers')->get(); // + whitelisted ?scope
+```
+
+### Explicit mode (jobs, commands, scheduled tasks, tests — no request)
+
+Pass user + org explicitly; org scope comes from the passed org, not a route.
+
+```php
+// Single query:
+$count = Rhino::forUser($user)->inOrganization($org)->query(Task::class)->count();
+
+// Block form (preferred for jobs/workers — isolates + restores ambient state, even on exception):
+$metrics = Rhino::forUser($user)->inOrganization($org)->run(function () {
+    return [
+        'tasks'    => Rhino::query(Task::class)->count(),   // ambient resolves to $org here
+        'projects' => Rhino::query(Project::class)->count(),
+    ];
+});
+```
+
+### Fails CLOSED
+
+`Rhino::query()` NEVER returns an unscoped query for a tenant-owned model. No org context → throws `MissingTenantContext` (opposite of a raw model query, which fails OPEN outside a request and returns every tenant's rows).
+
+```php
+Rhino::query(Task::class); // no tenant context → throws MissingTenantContext
+```
+
+### Worked example: tenant-safe dashboard (aggregates two resources)
+
+```php
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\Project;
+use App\Models\Task;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Gate;
+use Rhino\Facades\Rhino;
+
+class DashboardController extends Controller
+{
+    public function index(): JsonResponse
+    {
+        Gate::authorize('viewAny', Project::class);   // authorize ACCESS per resource
+        Gate::authorize('viewAny', Task::class);
+
+        $projects = Rhino::query(Project::class);      // scope ROWS (org-scoped bases)
+        $tasks    = Rhino::query(Task::class);
+
+        return response()->json([
+            'projects_total' => (clone $projects)->count(),
+            'tasks_total'    => (clone $tasks)->count(),
+            'tasks_by_status'=> (clone $tasks)
+                ->selectRaw('status, count(*) as total')
+                ->groupBy('status')
+                ->pluck('total', 'status'),
+        ]);
+    }
+}
+```
+
+Route: register INSIDE the tenant group (so `ResolveOrganizationFromRoute` sets the org and direct mode works), ABOVE the auto CRUD routes.
+
+```php
+// routes/api.php — ABOVE the auto-generated section
+Route::prefix('{organization}')
+    ->middleware(['auth:sanctum', \App\Http\Middleware\ResolveOrganizationFromRoute::class])
+    ->group(function () {
+        Route::get('dashboard', [\App\Http\Controllers\DashboardController::class, 'index']);
+    });
+```
+
+### Controller trait — `Rhino\Support\InteractsWithRhinoResources`
+
+```php
+use Rhino\Support\InteractsWithRhinoResources;
+
+class DashboardController extends Controller
+{
+    use InteractsWithRhinoResources;
+
+    public function index(): JsonResponse
+    {
+        return response()->json([
+            'base_query' => $this->scoped(Task::class),                 // == Rhino::query(Task::class)
+            // ifCanView runs the metric only if Gate allows viewAny; else returns null (no 403):
+            'open_tasks' => $this->ifCanView(Task::class, fn ($q) => $q->where('status', 'open')->count()),
+        ]);
+    }
+}
+```
+
+### Best practices
+
+- Always go through the resolver — never raw model query / raw SQL in a custom controller for tenant-owned models.
+- Resolver scopes ROWS; policies authorize ACCESS. Gate each resource: `Gate::authorize('viewAny', Model::class)` (or `ifCanView()` to skip a widget instead of 403ing the request).
+- Offload expensive/external work to a cached service (compute in a job with explicit mode, cache, read cache in controller) so the per-request path stays cheap.
 
 ---
 

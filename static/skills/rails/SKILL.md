@@ -26,6 +26,7 @@ Rhino auto-generates a complete REST API from your model definitions. Here is ev
 | 12 | **Field Selection (Sparse Fieldsets)** | `?fields[posts]=id,title,status` to reduce payload. Primary key always included. |
 | 13 | **Eager Loading (Includes)** | `?include=user,comments` with nested support (`comments.user`). Count (`commentsCount`) and existence (`commentsExists`) suffixes. Authorization checked per include. |
 | 13b | **Named Scopes** | Client selects a model-whitelisted scope via `?scope=name` (camelCase on wire). `rhino_scopes :active, available_for_drivers: Scopes::AvailableForDriversScope` + `rhino_default_scope :active`. Complex scopes subclass `Rhino::ResourceScope` (`apply(relation)`, `user`/`organization`/`role` helpers). No `?scope` → default applies. Non-whitelisted name → **403** (not silently ignored). Index + trashed only, not show. Narrows the authorized/org-scoped set only. |
+| 13c | **Custom Controllers (tenant-safe resolver)** | `Rhino.query(Model)` returns an org-scoped `ActiveRecord::Relation` (org+user from `RequestStore`) for dashboards/reports/aggregations beyond CRUD. `Rhino.scoped_query(Model, 'name')` adds a whitelisted named scope. Explicit (job/rake/test/console) mode: `Rhino.for_user(user).in_organization(org).query(Model)` / `.run { … }`. **Fails closed**: no org context → raises `Rhino::MissingTenantContext` (opposite of raw `Model.all`, which fails OPEN outside a request). `Rhino.context.user` / `.organization` expose current context. |
 | 14 | **Multi-Tenancy** | Organization-based data isolation via `BelongsToOrganization` concern. Auto-sets `organization_id` via `RequestStore`, default scope filters queries. Route-prefix or subdomain resolution. |
 | 15 | **Nested Ownership Auto-Detection** | Models without direct `organization_id` are scoped by walking `belongs_to` chains (e.g., Comment → Post → Blog → Organization). |
 | 16 | **Route Groups** | Multiple URL prefixes with different middleware/auth per group, optionally constrained to a host via `domain:` (literal or `{organization}.example.com` for subdomain multitenancy). Reserved names: `:tenant` (org-scoped + invitations) and `:public` (no auth). Opt-in per-group `auth:` (group-tagged auth route set) and `hooks:` (lifecycle hooks). |
@@ -2480,6 +2481,113 @@ class Post < Rhino::RhinoModel
   end
 end
 ```
+
+---
+
+## 18b. Custom Controllers (Tenant-Safe Resolver)
+
+CRUD is auto-generated and tenant-safe (org scope + policies + global scopes applied in one place). Anything beyond CRUD — dashboards, reports, aggregations, bulk ops — needs a **custom Rails controller**, which bypasses that pipeline. Use `Rhino.query` to keep it isolated by construction. Defined in `lib/rhino/query.rb` / `context.rb` / `missing_tenant_context.rb`.
+
+### Never a raw query
+
+```ruby
+# WRONG — raw query, no org scope. Cross-tenant leak (and fails OPEN outside a request).
+Task.where(status: 'open').count
+
+# CORRECT — resolver returns an already-org-scoped relation.
+Rhino.query(Task).where(status: 'open').count
+```
+
+Worse for relationship-scoped models (`Task → Project → Organization`, no `organization_id` column): there's no column to filter — scoping lives in the framework's `belongs_to` walk that a raw query skips.
+
+### Direct mode (inside a tenant request)
+
+`Rhino.query(model_class)` → `ActiveRecord::Relation` already scoped to the request's org+user (from `RequestStore`). Build aggregations on it with the full AR API.
+
+```ruby
+class ReportsController < ApplicationController
+  def show
+    tasks = Rhino.query(Task)   # org-scoped base query
+    render json: {
+      total:     tasks.count,
+      completed: tasks.where(status: 'done').count,
+      by_status: tasks.group(:status).count,
+    }
+  end
+end
+```
+
+Named scope on top: `Rhino.scoped_query(Task, 'availableForDrivers')` (wire name, camelCase; `nil` → `rhino_default_scope`).
+
+### Explicit mode (job / rake / scheduled / test / console — no request)
+
+Pass user + org explicitly; org scope comes from the passed org, not a route.
+
+```ruby
+# Query form
+overdue = Rhino.for_user(user).in_organization(org)
+               .query(Task)
+               .where('due_date < ?', Date.current)
+               .count
+
+# Block form — context installed into RequestStore for the block, restored after
+Rhino.for_user(user).in_organization(org).run do
+  overdue   = Rhino.query(Task).where('due_date < ?', Date.current).count
+  completed = Rhino.query(Task).where(status: 'done').count
+end
+```
+
+Context is snapshotted/installed/restored — no stickiness; a later `Rhino.query` with no context still fails closed.
+
+### Fails closed
+
+Org-scopable model + no org context → **raises `Rhino::MissingTenantContext`** (never an unscoped relation). Opposite of raw `Model.all`, which fails OPEN (returns every tenant's rows) outside a request. Non-tenant models: `Rhino.query` returns the relation unchanged.
+
+```ruby
+Rhino.query(Task)   # no request, no explicit org
+# => Rhino::MissingTenantContext: Task
+```
+
+### Context accessors
+
+`Rhino.context.user` and `Rhino.context.organization` — current user/org (explicit override if in effect, else `RequestStore`).
+
+### Worked example: tenant-safe dashboard (aggregates across two resources)
+
+```ruby
+class DashboardController < ApplicationController
+  def show
+    user = Rhino.context.user
+    # Resolver scopes ROWS; policy authorizes ACCESS — gate each resource.
+    unless ProjectPolicy.new(user, Project).index? && TaskPolicy.new(user, Task).index?
+      return render json: { message: 'This action is unauthorized.' }, status: :forbidden
+    end
+
+    projects = Rhino.query(Project)
+    tasks    = Rhino.query(Task)
+
+    render json: {
+      projects: { total: projects.count, archived: projects.where(status: 'archived').count },
+      tasks:    { total: tasks.count,
+                  overdue: tasks.where('due_date < ?', Date.current).count,
+                  by_status: tasks.group(:status).count },
+    }
+  end
+end
+```
+
+```ruby
+# config/routes.rb
+scope 'api/:organization' do
+  get 'dashboard', to: 'dashboard#show'
+end
+```
+
+### Best practices
+
+- Always go through `Rhino.query` / `Rhino.scoped_query` — never raw model queries or raw SQL in a custom controller.
+- Gate each resource with its policy (rows vs. access are separate checks): `head :forbidden unless TaskPolicy.new(user, Task).index?`.
+- Offload expensive/external work to a cached service so the per-request path stays cheap: `Rails.cache.fetch(["dashboard", Rhino.context.organization&.id], expires_in: 5.minutes) { DashboardStats.new.call }`.
 
 ---
 
