@@ -8,7 +8,6 @@ import DocSidebarNavbarItem from '@theme/NavbarItem/DocSidebarNavbarItem';
 import DocsVersionNavbarItem from '@theme/NavbarItem/DocsVersionNavbarItem';
 import DocsVersionDropdownNavbarItem from '@theme/NavbarItem/DocsVersionDropdownNavbarItem';
 import FrameworkDropdown from '@site/src/components/FrameworkDropdown';
-import AIDownloadButton from '@site/src/components/AIDownloadButton';
 
 import type {ComponentTypesObject} from '@theme/NavbarItem/ComponentTypes';
 
@@ -23,7 +22,6 @@ const ComponentTypes: ComponentTypesObject = {
   docsVersion: DocsVersionNavbarItem,
   docsVersionDropdown: DocsVersionDropdownNavbarItem,
   'custom-frameworkDropdown': FrameworkDropdown as any,
-  'custom-aiDownload': AIDownloadButton as any,
 };
 
 export default ComponentTypes;

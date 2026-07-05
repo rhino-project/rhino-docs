@@ -76,10 +76,6 @@ const config: Config = {
           position: 'left',
         },
         {
-          type: 'custom-aiDownload',
-          position: 'right',
-        },
-        {
           href: 'https://github.com/rhino-project/rhino-laravel',
           label: 'GitHub',
           position: 'right',
