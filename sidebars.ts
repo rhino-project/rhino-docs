@@ -27,6 +27,19 @@ const sidebars: SidebarsConfig = {
         'server/export-types',
       ],
     },
+    {
+      type: 'category',
+      label: 'Best Practices',
+      collapsed: true,
+      link: {type: 'doc', id: 'server/best-practices/index'},
+      items: [
+        'server/best-practices/models-and-queries',
+        'server/best-practices/authorization',
+        'server/best-practices/tenant-safety',
+        'server/best-practices/data-lifecycle',
+        'server/best-practices/codegen',
+      ],
+    },
   ],
   railsSidebar: [
     {
