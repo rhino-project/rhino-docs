@@ -70,6 +70,9 @@ export function buildRhinoConfig(prisma: PrismaClient): RhinoConfig {
       userOrganizationModel: 'userRole',
     },
 
+    // Column matched by :id on member routes (default: each model's primary key)
+    // routeKey: 'hashId',
+
     // Authentication
     auth: {
       jwtSecret: process.env.JWT_SECRET ?? 'change-me-in-production',

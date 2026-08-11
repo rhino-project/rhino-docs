@@ -38,6 +38,7 @@ Rhino auto-generates a complete REST API from your model definitions. Here is ev
 | 21 | **Hidden Columns** | Base hidden columns (password, timestamps) + model-level (`rhino_additional_hidden`) + policy-level dynamic hiding per role. |
 | 22 | **Auto-Scope Discovery** | `HasAutoScope` concern auto-registers scopes by naming convention (`Scopes::{ModelName}Scope`). Extend `Rhino::ResourceScope` for user/org/role access. |
 | 23 | **UUID Primary Keys** | `HasUuid` concern for auto-generated UUID via `SecureRandom.uuid`. |
+| 23b | **Configurable Route Key** | `rhino_route_key :hash_id` (or global `config.route_key`) makes member routes (show/update/destroy/restore/force-delete) match `:id` against that column instead of the PK. Resolution: `rhino_route_key_column \|\| Rhino.config.route_key \|\| primary_key`. Column MUST be unique (+ indexed); nonexistent column → clear ArgumentError on first use. Route key + `id` always kept in output; `?fields[]` force-includes it. FKs, nested-op `id`s/`$N.id`, audit ids, org resolution stay PK-based. |
 | 24 | **Middleware Support** | Global model middleware (`rhino_middleware`) and per-action middleware (`rhino_middleware_actions`). |
 | 25 | **Action Exclusion** | `rhino_except_actions` to disable specific CRUD routes per model. |
 | 26 | **Generator CLI** | `rhino:install` (setup), `rhino:generate` (scaffold model/policy/scope), `rhino:export_postman` (API collection), `invitation:link` (test invitations). |
@@ -308,6 +309,9 @@ class Post < Rhino::RhinoModel
   # -- Route Exclusion --
   rhino_except_actions :destroy
 
+  # -- Route Key --
+  rhino_route_key :hash_id
+
   # -- Column Hiding --
   rhino_additional_hidden :api_token, :stripe_id
 
@@ -339,6 +343,7 @@ end
 | `rhino_middleware` | `*strings` | Middleware for ALL routes |
 | `rhino_middleware_actions` | `hash` | Middleware for specific actions (`:index`, `:show`, `:store`, `:update`, `:destroy`) |
 | `rhino_except_actions` | `*symbols` | CRUD actions to exclude from route generation |
+| `rhino_route_key` | `symbol` | Column matched by `:id` on member routes (show/update/destroy/restore/force-delete); falls back to global `config.route_key`, then PK. Must be unique; always kept in output |
 | `rhino_additional_hidden` | `*symbols` | Additional fields to always hide from API responses |
 | `rhino_audit_exclude` | `*symbols` | Fields to exclude from audit trail logging |
 
@@ -408,6 +413,8 @@ Migration:
 t.uuid :uuid, null: true
 add_index :invoices, :uuid, unique: true
 ```
+
+Pair with `rhino_route_key :uuid` to serve records at `/api/invoices/{uuid}` — HasUuid generates the external identifier, the route key makes it routable.
 
 ### BelongsToOrganization
 

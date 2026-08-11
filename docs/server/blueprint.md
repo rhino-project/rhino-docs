@@ -238,6 +238,7 @@ options:
   except_actions: []              # block actions for ALL roles
   pagination: false               # enable pagination
   per_page: 25                    # items per page
+  route_key: null                 # emits $routeKey — member routes match {id} against this column (must be unique); tests use route-key URLs
 
 columns:
   field_name:

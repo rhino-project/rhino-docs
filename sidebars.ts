@@ -40,6 +40,7 @@ const sidebars: SidebarsConfig = {
         'server/best-practices/codegen',
       ],
     },
+    'server/release-notes',
   ],
   railsSidebar: [
     {
@@ -64,6 +65,7 @@ const sidebars: SidebarsConfig = {
         'rails/export-types',
       ],
     },
+    'rails/release-notes',
   ],
   nestjsSidebar: [
     {
@@ -90,6 +92,7 @@ const sidebars: SidebarsConfig = {
         'nestjs/export-types',
       ],
     },
+    'nestjs/release-notes',
   ],
   reactSidebar: [
     {

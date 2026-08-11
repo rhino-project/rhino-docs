@@ -129,6 +129,9 @@ class Post extends RhinoModel
     // ── Route Exclusion ──────────────────────────────────────────
     public static array $exceptActions = ['destroy']; // skip DELETE endpoint
 
+    // ── Route Key ────────────────────────────────────────────────
+    public static string $routeKey = 'hash_id'; // column matched by {id} on member routes
+
 }
 ```
 
@@ -150,9 +153,59 @@ class Post extends RhinoModel
 | `$middleware` | `array` | Middleware applied to **all** routes for this model. |
 | `$middlewareActions` | `array` | Middleware applied to **specific** actions only. Keys are action names (`index`, `show`, `store`, `update`, `destroy`). |
 | `$exceptActions` | `array` | List of CRUD actions to exclude from route generation. Valid values: `'index'`, `'show'`, `'store'`, `'update'`, `'destroy'`. |
+| `$routeKey` | `string` | Column matched against the `{id}` URL segment on member routes (`show`, `update`, `destroy`, `restore`, force-delete). Falls back to the global `route_key` config, then the primary key. See [Route Key](#route-key). |
 
 :::tip
 You only need to declare properties that differ from their defaults. For example, if you do not need filtering, simply omit `$allowedFilters` entirely.
+:::
+
+### Route Key
+
+By default, the `{id}` segment on member routes (`show`, `update`, `destroy`, `restore`, force-delete) is matched against the model's primary key. Set `$routeKey` to look the record up by a different column instead — for example, to serve records at hash URLs and keep incremental IDs out of your API:
+
+```php title="app/Models/Job.php"
+class Job extends RhinoModel
+{
+    public static string $routeKey = 'hash_id';
+}
+```
+
+```
+GET /api/jobs/f3a9c1   ->  WHERE hash_id = 'f3a9c1'
+```
+
+The route parameter itself is still literally `{id}` — only the lookup column changes.
+
+**Resolution order:**
+
+1. `$routeKey` on the model
+2. The global `'route_key'` option in `config/rhino.php`
+3. The model's primary key, via Eloquent's `getRouteKeyName()`
+
+Setting the global option to `null`, `''`, or `'id'` all mean "not set" — resolution falls through to `getRouteKeyName()`, so overriding `getRouteKeyName()` on a model works too, and custom `$primaryKey` names are honored. You can resolve the effective column for any model with `Rhino::routeKeyName($model)` on the facade.
+
+A few behaviors to be aware of:
+
+- The route-key column and `id` are **always kept in serialized output**, regardless of policy whitelists — clients need both to build URLs.
+- When the requested resource is the Organization model itself, its identity check also uses the route key.
+- In [Blueprint](./blueprint) specs, set `options: { route_key: hash_id }` to emit the `$routeKey` static in the generated model and use hash URLs in generated tests.
+
+:::warning
+The route-key column **must be unique** and **should be indexed** — every member request queries it. If values are not unique, an arbitrary matching record is returned.
+
+```php title="database/migrations/create_jobs_table.php"
+$table->string('hash_id')->unique();
+```
+:::
+
+:::info Scope of the route key
+The route key only changes the URL lookup on the five member endpoints. Foreign keys in request payloads, nested-operation `id`s and `$N.id` references, `exists:` validation, audit `auditable_id`, and multi-tenant organization resolution (`organization_identifier_column`) all remain primary-key based.
+:::
+
+:::warning Known limitations
+- A record whose route-key value is literally `trashed` is unreachable — literal routes are registered before `{id}`.
+- Hiding the real `id` column (via `$additionalHiddenColumns`) is possible, but nested-operation results still emit the raw primary key.
+- Filtering by the route-key column requires declaring it in `$allowedFilters`, as usual.
 :::
 
 ## Available Traits
@@ -313,6 +366,10 @@ Your database table must have a `uuid` column. Add it in your migration:
 ```php title="database/migrations/create_invoices_table.php"
 $table->uuid('uuid')->unique()->nullable();
 ```
+:::
+
+:::tip
+`HasUuid` generates the external-facing identifier; a [route key](#route-key) is what makes it routable. Combine the two (`public static string $routeKey = 'uuid';`) to serve records at `/api/invoices/{uuid}` instead of exposing incremental IDs.
 :::
 
 ---

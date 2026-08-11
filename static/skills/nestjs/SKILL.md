@@ -44,6 +44,7 @@ In Rhino for NestJS:
 | 21 | **Hidden Columns** | Base (password, timestamps) + model-level (`additionalHiddenColumns`) + policy-level dynamic hiding per role. |
 | 22 | **Auto-Scope Discovery** | Custom `scopes: [Class]` per registration; each `RhinoScope.apply(where, ctx)` augments the Prisma `where`. |
 | 23 | **UUID Primary Keys** | `hasUuid: true` for string UUID primary keys (`@default(uuid())` in Prisma). |
+| 23b | **Configurable Route Key** | `routeKey: 'hashId'` on the registration (also `@RouteKey('hashId')` / `defineModel({ routeKey })`), or global `routeKey` on the root config — member routes (show/update/destroy/restore/force-delete) match `:id` against that column instead of the PK. Resolution: registration → global config → PK. Param always matched as a **string** (digit-only hashes never coerced — contrast `hasUuid`). Column MUST be unique (`@unique`); empty string rejected at boot. Route key + `id` always kept in output; `?fields[]` force-includes it. FKs, nested-op `id`s/`$N.id`, `fkConstraints`, audit ids, org resolution stay PK-based. |
 | 24 | **Middleware Support** | Per-model `middleware` and per-action `actionMiddleware` (arrays of NestJS middleware classes). |
 | 25 | **Action Exclusion** | `exceptActions` disables specific CRUD routes per model. |
 | 26 | **Generator CLI** | `npx rhino install` (setup), `npx rhino generate` (scaffold model/policy/scope stub), `npx rhino blueprint`, `npx rhino export-postman`, `npx rhino export-types`. |
@@ -319,6 +320,7 @@ A model = a Prisma model + a `ModelRegistration`. Define behaviors as plain fiel
 | `middleware` | `Type<NestMiddleware>[]` | `[]` | Middleware for all routes of this model. |
 | `actionMiddleware` | `Record<string, Type<NestMiddleware>[]>` | `{}` | Middleware per action. |
 | `exceptActions` | `string[]` | `[]` | CRUD actions to exclude. |
+| `routeKey` | `string` | — | Column matched by `:id` on member routes (falls back to global `routeKey` config, then PK). Must be unique; matched as string; always kept in output. |
 
 ### Complete Example
 

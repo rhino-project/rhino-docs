@@ -373,6 +373,10 @@ const { data: post, isLoading, error } = useModelShow('posts', 42, {
 | `id` | `string \| number` | The record ID. The query is disabled when `id` is falsy. |
 | `options` | `ModelQueryOptions` | Optional. Supports `includes`, `fields`, `filters`, and `sort`. |
 
+:::info
+The `id` argument is whatever the server's **route key** expects in the URL. For models with a configured route key (see the server's [Models — Route Key](../server/models.md#route-key)), pass the route-key value — e.g., `useModelShow('jobs', job.hash_id)` — no client-side configuration is needed. Because react-query cache keys embed the value you pass, use the route key consistently across index, show, and mutations so invalidation and cache hits line up.
+:::
+
 ### Return Value
 
 | Property | Type | Description |
@@ -780,7 +784,7 @@ updatePost.mutate({
 
 | Property | Type | Description |
 |---|---|---|
-| `id` | `string \| number` | The ID of the record to update. |
+| `id` | `string \| number` | The ID of the record to update. For models with a server-side [route key](../server/models.md#route-key), pass the route-key value (e.g., `job.hash_id`). |
 | `data` | `Record<string, any>` | The fields to update. Only include changed fields. |
 
 ### Return Value
@@ -1039,6 +1043,8 @@ Pass the record ID directly to `mutate()`:
 ```tsx title="src/components/DeleteButton.tsx"
 deletePost.mutate(42);
 ```
+
+For models with a server-side [route key](../server/models.md#route-key), pass the route-key value instead (e.g., `deleteJob.mutate(job.hash_id)`).
 
 ### Return Value
 

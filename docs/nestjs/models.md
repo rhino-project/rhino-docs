@@ -87,6 +87,9 @@ models: {
 
     // -- Route exclusion --
     exceptActions: ['destroy'],    // skip DELETE endpoint
+
+    // -- Route key --
+    routeKey: 'hashId',            // column matched by :id on member routes
   },
 },
 ```
@@ -123,9 +126,62 @@ models: {
 | `middleware` | `Type<NestMiddleware>[]` | `[]` | NestJS middleware applied to **all** routes for this model. |
 | `actionMiddleware` | `Record<string, Type<NestMiddleware>[]>` | `{}` | Middleware applied to **specific** actions (`index`, `show`, `store`, `update`, `destroy`). |
 | `exceptActions` | `string[]` | `[]` | CRUD actions to exclude. Valid: `index`, `show`, `store`, `update`, `destroy`, `trashed`, `restore`, `forceDelete`. |
+| `routeKey` | `string` | — | Column matched against the `:id` URL segment on member routes (`show`, `update`, `destroy`, `restore`, force-delete). Falls back to the global `routeKey` config, then the primary key. See [Route Key](#route-key). |
 
 :::tip
 You only need to declare properties that differ from their defaults. If you do not need filtering, simply omit `allowedFilters`.
+:::
+
+### Route Key
+
+By default, the `:id` segment on member routes (`show`, `update`, `destroy`, `restore`, force-delete) is matched against the model's primary key. Set `routeKey` to look the record up by a different column instead — for example, to serve records at hash URLs and keep incremental IDs out of your API:
+
+```ts title="src/rhino.config.ts"
+jobs: {
+  model: 'job',
+  routeKey: 'hashId',
+},
+```
+
+```
+GET /api/jobs/f3a9c1   ->  WHERE hashId = 'f3a9c1'
+```
+
+The route parameter itself is still literally `:id` — only the lookup column changes. The same setting is available on the `@RouteKey('hashId')` decorator and on `defineModel({ ..., routeKey })`.
+
+**Resolution order:**
+
+1. `routeKey` on the `ModelRegistration`
+2. The global `routeKey` on the root Rhino config
+3. The model's primary key (`id`)
+
+A few behaviors to be aware of:
+
+- Boot-time validation rejects an empty-string `routeKey`.
+- When a custom route key is set, the URL parameter is **always matched as a string** — a digit-only hash like `"48291"` is never coerced to a number. (Contrast with `hasUuid`, which changes the type of the primary key itself.)
+- The route-key column and `id` are **always kept in serialized output**, regardless of policy whitelists — and `?fields[]` selection force-includes the route key so responses stay routable.
+- In [Blueprint](./blueprint) specs, set `options: { route_key: ... }` to thread the route key through generated registrations and tests.
+
+:::warning
+The route-key column **must be unique** (add `@unique` in Prisma) and **should be indexed** — every member request queries it. If values are not unique, an arbitrary matching record is returned.
+
+```prisma title="prisma/schema.prisma"
+model Job {
+  id     Int    @id @default(autoincrement())
+  hashId String @unique @map("hash_id")
+  // ...
+}
+```
+:::
+
+:::info Scope of the route key
+The route key only changes the URL lookup on the five member endpoints. Foreign keys in request payloads, nested-operation `id`s and `$N.id` references, `fkConstraints` validation, audit `auditable_id`, and multi-tenant organization resolution (`organizationIdentifierColumn`) all remain primary-key based.
+:::
+
+:::warning Known limitations
+- A record whose route-key value is literally `trashed` is unreachable — literal routes are registered before `:id`.
+- Hiding the real `id` column (via `additionalHiddenColumns`) is possible, but nested-operation results still emit the raw primary key.
+- Filtering by the route-key column requires declaring it in `allowedFilters`, as usual.
 :::
 
 ## Behaviors (Formerly "Mixins")
@@ -205,6 +261,10 @@ invoices: {
   hasUuid: true,
 },
 ```
+
+:::info hasUuid vs. routeKey
+`hasUuid` changes the **type of the primary key itself** — the `id` column is a string UUID. A [route key](#route-key) instead keeps the numeric primary key and matches the `:id` URL segment against a **different** unique column (e.g., `hashId`). Use `hasUuid` when the whole table is keyed by UUID; use `routeKey` when you only want external URLs to stop exposing incremental IDs.
+:::
 
 ### Custom scopes
 

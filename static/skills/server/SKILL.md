@@ -35,6 +35,7 @@ Rhino auto-generates a complete REST API from your model definitions. Here is ev
 | 21 | **Hidden Columns** | Base hidden columns (password, timestamps) + model-level + policy-level dynamic hiding per role. |
 | 22 | **Auto-Scope Discovery** | `HasAutoScope` trait auto-registers scopes by naming convention (`App\Models\Scopes\PostScope`). |
 | 23 | **UUID Primary Keys** | `HasUuid` trait for auto-generated UUID primary keys. |
+| 23b | **Configurable Route Key** | `public static string $routeKey = 'hash_id'` (or global `'route_key'` in config/rhino.php) makes member routes (show/update/destroy/restore/force-delete) match `{id}` against that column instead of the PK. Resolution: model → global config → PK (`getRouteKeyName()`). Column MUST be unique (+ indexed). Route key + `id` always kept in serialized output. FKs, nested-op `id`s/`$N.id`, `exists:` validation, audit `auditable_id`, org resolution stay PK-based. Resolve via `Rhino::routeKeyName($model)`. |
 | 24 | **Middleware Support** | Global model middleware (`$middleware`) and per-action middleware (`$middlewareActions`). |
 | 25 | **Action Exclusion** | `$exceptActions` to disable specific CRUD routes per model. |
 | 26 | **Generator CLI** | `rhino:install` (setup), `rhino:generate` (scaffold model/policy/scope), `rhino:export-postman` (API collection), `invitation:link` (test invitations). |
@@ -490,6 +491,7 @@ class Post extends RhinoModel
 | `$middleware` | `array` | Middleware for all routes |
 | `$middlewareActions` | `array` | Middleware for specific actions |
 | `$exceptActions` | `array` | CRUD actions to exclude from route generation |
+| `$routeKey` | `string` | Column matched by `{id}` on member routes (show/update/destroy/restore/force-delete); falls back to global `route_key` config, then PK. Must be unique; always kept in serialized output |
 
 ### HasValidation Trait
 
@@ -573,6 +575,8 @@ Auto-generates UUID on creation. Requires `uuid` column in migration:
 ```php
 $table->uuid('uuid')->unique()->nullable();
 ```
+
+Pair with `public static string $routeKey = 'uuid';` to serve records at `/api/invoices/{uuid}` — HasUuid generates the external identifier, the route key makes it routable.
 
 ### BelongsToOrganization Trait
 

@@ -446,7 +446,7 @@ Request
 | NestJS | `@rhino-dev/rhino-nestjs` | `npm install @rhino-dev/rhino-nestjs@^4.0` |
 | React | `@rhino-dev/rhino-react` | `npm install @rhino-dev/rhino-react@^4.0` |
 
-### Feature Summary (28 features)
+### Feature Summary (29 features)
 
 | # | Feature | Description |
 |---|---------|-------------|
@@ -478,6 +478,7 @@ Request
 | 26 | **Generator CLI** | `rhino:install`, `rhino:generate`, `rhino:export-postman` |
 | 27 | **Postman Export** | Auto-generated Postman Collection v2.1 |
 | 28 | **Blueprint** | YAML to policies, tests, seeders. Deterministic, zero AI tokens |
+| 29 | **Configurable Route Key** | Member routes match `{id}` against a chosen unique column instead of the PK (Laravel `$routeKey`, Rails `rhino_route_key`, NestJS `routeKey`; per-model or global config). FKs, nested ops, and audit ids stay PK-based |
 
 ### API URL Pattern
 

@@ -57,6 +57,9 @@ return [
         'middleware' => null,                       // Custom middleware class
     ],
 
+    // Column matched by {id} on member routes (default: each model's primary key)
+    // 'route_key' => 'hash_id',
+
     // Invitation system
     'invitations' => [
         'expires_days' => env('INVITATION_EXPIRES_DAYS', 7),

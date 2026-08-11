@@ -50,6 +50,9 @@ Rhino.configure do |c|
   c.multi_tenant[:organization_identifier_column] = 'id'  # 'id', 'slug', or 'uuid'
   c.multi_tenant[:middleware] = nil                        # Custom middleware class
 
+  # Column matched by :id on member routes (default: each model's primary key)
+  # c.route_key = :hash_id
+
   # Invitation system
   c.invitations[:expires_days] = 7
   c.invitations[:allowed_roles] = nil  # nil = all roles, or ['admin', 'editor']

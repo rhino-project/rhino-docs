@@ -112,6 +112,9 @@ class Post < Rhino::RhinoModel
   # ── Route Exclusion ──────────────────────────────────────────
   rhino_except_actions :destroy  # skip DELETE endpoint
 
+  # ── Route Key ────────────────────────────────────────────────
+  rhino_route_key :hash_id  # column matched by :id on member routes
+
   # ── Relationships ────────────────────────────────────────────
   belongs_to :user
   belongs_to :blog
@@ -137,9 +140,57 @@ end
 | `rhino_middleware` | `*strings` | Middleware applied to **all** routes for this model. |
 | `rhino_middleware_actions` | `hash` | Middleware applied to **specific** actions only. Keys are action names (`:index`, `:show`, `:store`, `:update`, `:destroy`). |
 | `rhino_except_actions` | `*symbols` | List of CRUD actions to exclude from route generation. Valid values: `:index`, `:show`, `:store`, `:update`, `:destroy`. |
+| `rhino_route_key` | `symbol` | Column matched against the `:id` URL segment on member routes (`show`, `update`, `destroy`, `restore`, force-delete). Falls back to the global `config.route_key`, then the primary key. See [Route Key](#route-key). |
 
 :::tip
 You only need to declare DSL methods that differ from their defaults. For example, if you do not need filtering, simply omit `rhino_filters` entirely.
+:::
+
+### Route Key
+
+By default, the `:id` segment on member routes (`show`, `update`, `destroy`, `restore`, force-delete) is matched against the model's primary key. Set `rhino_route_key` to look the record up by a different column instead — for example, to serve records at hash URLs and keep incremental IDs out of your API:
+
+```ruby title="app/models/job.rb"
+class Job < Rhino::RhinoModel
+  rhino_route_key :hash_id
+end
+```
+
+```
+GET /api/jobs/f3a9c1   ->  WHERE hash_id = 'f3a9c1'
+```
+
+The route parameter itself is still literally `:id` — only the lookup column changes.
+
+**Resolution order:** `rhino_route_key_column || Rhino.config.route_key || primary_key`
+
+1. `rhino_route_key` on the model
+2. The global `config.route_key` in `config/initializers/rhino.rb`
+3. The model's primary key
+
+A few behaviors to be aware of:
+
+- A configured column that does not exist on the table raises a clear `ArgumentError` on first use.
+- The route-key column and `id` are **always kept in serialized output**, regardless of policy whitelists — and sparse fieldsets (`?fields[]`) force-include the route key so responses stay routable.
+- In [Blueprint](./blueprint) specs, set `options: { route_key: hash_id }` to emit `rhino_route_key` in the generated model and use hash URLs in generated specs. The validator errors on unknown columns and warns when the column is not declared `unique`.
+
+:::warning
+The route-key column **must be unique** and **should be indexed** — every member request queries it. If values are not unique, an arbitrary matching record is returned.
+
+```ruby title="db/migrate/create_jobs.rb"
+t.string :hash_id
+add_index :jobs, :hash_id, unique: true
+```
+:::
+
+:::info Scope of the route key
+The route key only changes the URL lookup on the five member endpoints. Foreign keys in request payloads, nested-operation `id`s and `$N.id` references, FK validation, audit `auditable_id`, and multi-tenant organization resolution (`organization_identifier_column`) all remain primary-key based.
+:::
+
+:::warning Known limitations
+- A record whose route-key value is literally `trashed` is unreachable — literal routes are registered before `:id`.
+- Hiding the real `id` column (via `rhino_additional_hidden`) is possible, but nested-operation results still emit the raw primary key.
+- Filtering by the route-key column requires declaring it in `rhino_filters`, as usual.
 :::
 
 ## Available Concerns
@@ -291,6 +342,10 @@ Your database table must have a `uuid` column. Add it in your migration:
 t.uuid :uuid, null: true
 add_index :invoices, :uuid, unique: true
 ```
+:::
+
+:::tip
+`HasUuid` generates the external-facing identifier; a [route key](#route-key) is what makes it routable. Combine the two (`rhino_route_key :uuid`) to serve records at `/api/invoices/{uuid}` instead of exposing incremental IDs.
 :::
 
 ---

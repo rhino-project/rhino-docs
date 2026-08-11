@@ -79,6 +79,8 @@ posts: {
 
 The `GlobalController` extracts the model slug from the route metadata, looks up the `ModelRegistration` in the `models` map, and accesses the corresponding Prisma delegate via `PrismaService.model(registration.model)`.
 
+For member actions (`show`, `update`, `destroy`, `restore`, force-delete), the record is loaded by matching the `:id` route parameter against the model's **route key**: `routeKey` on the registration if set, otherwise the global `routeKey` config, otherwise the primary key. When a custom route key is configured, the parameter is always compared as a string. Unless configured, nothing changes — the lookup uses the primary key as always. See [Models — Route Key](./models#route-key).
+
 ### 6. Authorization
 
 The controller resolves the policy from the registration's `policy` field (if defined) and calls the appropriate policy method (each also receives the resolved organization for tenant routes):

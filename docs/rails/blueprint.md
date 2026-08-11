@@ -225,6 +225,7 @@ options:
   except_actions: []              # block actions for ALL roles
   pagination: false               # enable pagination
   per_page: 25                    # items per page
+  route_key: null                 # emits rhino_route_key — member routes match :id against this column; validator requires an existing column and warns unless it is unique; specs use route-key URLs
 
 columns:
   field_name:

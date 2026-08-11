@@ -64,6 +64,8 @@ Each CRUD action maps to a policy method:
 | `PUT /posts/{id}` | update | `update($user, $post)` |
 | `DELETE /posts/{id}` | destroy | `delete($user, $post)` |
 
+For member actions (`show`, `update`, `destroy`, `restore`, force-delete), Rhino first resolves the record by matching the `{id}` URL segment against the model's **route key**: `$routeKey` on the model if set, otherwise the global `route_key` config, otherwise the primary key. Unless configured, nothing changes — the lookup uses the primary key as always. See [Models — Route Key](./models#route-key).
+
 The policy checks the user's **roles and permissions** for the current organization. If the user lacks the required permission, a `403 Forbidden` response is returned immediately.
 
 ```php title="app/Policies/PostPolicy.php"
