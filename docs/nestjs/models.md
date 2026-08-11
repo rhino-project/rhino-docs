@@ -121,7 +121,7 @@ models: {
 | `scopes` | `Type<RhinoScope>[]` | `[]` | Custom scope classes applied to **every** query (always-on). |
 | `namedScopes` | `Record<string, Type<RhinoNamedScope>>` | `{}` | Named scopes the client may **select** via `?scope=name`. Each `RhinoNamedScope.apply(ctx)` returns a Prisma where-fragment ANDed into the query. Non-whitelisted names return `403`. See [Querying — Named Scopes](./querying#named-scopes). |
 | `defaultScope` | `string` | — | Named scope applied automatically when no `?scope=` is provided (e.g., `'active'`). A listing convenience — not a security boundary; mandatory restrictions belong in `scopes`/`belongsToOrganization`. Requesting it by name is always allowed. |
-| `owner` | `string` | — | Parent relation/FK used for nested-ownership scoping of child resources. |
+| `owner` | `string` | — | Parent relation Rhino walks to the organization for tenant scoping of nested models (enforced on all queries since 4.6.1). See [Organization scoping](#organization-scoping). |
 | `fkConstraints` | `Array<{ field, model }>` | — | Foreign keys verified against the current organization. |
 | `middleware` | `Type<NestMiddleware>[]` | `[]` | NestJS middleware applied to **all** routes for this model. |
 | `actionMiddleware` | `Record<string, Type<NestMiddleware>[]>` | `{}` | Middleware applied to **specific** actions (`index`, `show`, `store`, `update`, `destroy`). |
@@ -325,7 +325,7 @@ The scope receives the current authenticated user via `ctx.user` (server-resolve
 
 ### Organization scoping
 
-Set `belongsToOrganization: true` for multi-tenant scoping. Rhino filters every query to the current organization and auto-sets `organizationId` on create. For nested models without a direct `organizationId`, use `owner` to point at the parent relation Rhino should walk to find the organization.
+Set `belongsToOrganization: true` for multi-tenant scoping. Rhino filters every query to the current organization and auto-sets `organizationId` on create. For nested models without a direct `organizationId`, use `owner` to point at the parent relation Rhino should walk to find the organization — since 4.6.1 the chain is resolved at boot and enforced on every query (index and member endpoints alike) as a nested filter such as `{ post: { organizationId } }`. `owner` accepts the Prisma relation field name (`'post'`), a dot-notated chain (`'task.project'`), or an FK-column form (`'postId'`); an unresolvable value logs a boot warning and leaves the model unscoped.
 
 ```ts title="src/rhino.config.ts"
 posts: {
