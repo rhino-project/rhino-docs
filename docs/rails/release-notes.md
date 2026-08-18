@@ -7,6 +7,56 @@ title: Release Notes
 
 Notable changes in each release of Rhino for Rails, newest first.
 
+## 4.7.0
+
+**Computed attributes, without the per-row cost.** Two new declaration hooks make derived values and aggregates first-class, so counts and expensive per-row values no longer need a hand-written controller.
+
+**Collection-level aggregates.** Declare `self.rhino_collection_computed_attributes` on a model and Rhino registers `GET /api/{resource}/computed` for it. Each callable is evaluated **once per request** over the fully scoped relation — not once per row:
+
+```ruby title="app/models/user.rb"
+class User < Rhino::RhinoModel
+  def self.rhino_collection_computed_attributes
+    {
+      "active_users_count" => ->(scope, _user) { scope.where(status: "active").count },
+      "blocked_users_count" => ->(scope, _user) { scope.where(status: "blocked").count }
+    }
+  end
+end
+```
+
+```bash
+GET /api/users/computed?attributes=active_users_count,blocked_users_count
+# → { "data": { "active_users_count": 128, "blocked_users_count": 4 } }
+```
+
+The relation handed to each callable already has the organization scope, default scopes, `?scope=`, `?filter[]=` and `?search=` applied — so aggregates describe exactly the set `index` would have listed. Omitting `?attributes=` returns every declared attribute the policy allows. The endpoint is gated by `index?`.
+
+**Opt-in record attributes.** Declare `rhino_record_computed_attributes` for per-row values that cost a query. Nothing is evaluated unless the client asks for it by name:
+
+```ruby title="app/models/user.rb"
+def rhino_record_computed_attributes
+  {
+    "open_tickets_count" => ->(record, _user) { record.tickets.where(closed_at: nil).count }
+  }
+end
+```
+
+```bash
+GET /api/users?computed_attributes=open_tickets_count
+GET /api/users/42?computed_attributes=open_tickets_count
+GET /api/users/trashed?computed_attributes=open_tickets_count
+```
+
+- Both kinds go through the **same policy gate as columns** — `permitted_attributes_for_show` whitelists, `hidden_attributes_for_show` blacklists.
+- An undeclared name and a policy-denied name return the same 403, so the endpoint never reveals which attributes a model declares.
+- Lambdas of arity 0, 1 or 2 are all accepted.
+- `rhino_except_actions :computed` drops the route.
+- The Postman export gains a **Computed Attributes** folder plus `?computed_attributes=` examples on Index and Show.
+
+See [Computed Attributes](./computed-attributes) for the full reference.
+
+Fully backward compatible — existing `rhino_computed_attributes` behaves exactly as before, read responses are unchanged unless a client sends `?computed_attributes=`, and the `/computed` route is registered only for models that declare collection attributes.
+
 ## 4.6.1
 
 **Security — cross-tenant isolation on member endpoints.** `show`, `update`, `destroy`, `restore`, and force-delete now apply the same organization scoping as `index`, including auto-detected indirect chains (e.g. task → project → organization). Previously, models without a direct `organization_id` column could be fetched or mutated cross-tenant by id (or route key), and `restore`/force-delete were not organization-scoped at all. Upgrading is strongly recommended for multi-tenant apps.

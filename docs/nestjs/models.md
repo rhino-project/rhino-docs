@@ -373,6 +373,8 @@ contracts: {
 },
 ```
 
+For per-row values that cost a query, and for collection-wide aggregates such as `activeUsersCount`, use the opt-in and collection-level hooks instead — see [Computed Attributes](./computed-attributes). Never write a custom controller just to return a count.
+
 Computed attributes can be controlled per-role via the policy:
 
 ```ts title="src/policies/ContractPolicy.ts"

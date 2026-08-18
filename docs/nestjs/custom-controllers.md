@@ -7,6 +7,10 @@ title: Custom Controllers
 
 Rhino auto-generates a full CRUD surface for every registered model — `index`, `show`, `store`, `update`, `destroy`, and the soft-delete routes — with zero controller code. That covers most of an API, but real apps always need logic beyond CRUD: a dashboard that aggregates across resources, a report that groups and counts, a computed summary, a bulk operation. Those live in a **custom controller** you write yourself.
 
+:::warning First check whether you need a controller at all
+Counts, sums and other **aggregates over one resource** do **not** need a controller — that is what [Computed Attributes](./computed-attributes) are for. `GET /api/tickets/computed?attributes=open_tickets_count` is org-scoped, policy-filtered, and narrowed by the same `?filter[]`/`?search=`/`?scope=` as the listing, all for a few lines on the model. Reach for a controller when the shape genuinely isn't "attributes of one resource" — cross-model reports, non-CRUD workflows, bulk operations.
+:::
+
 The moment you leave the generated controller, you also leave everything Rhino was doing for you on every query — organization scoping, policies, and global scopes. The `ResourceScopeService` gives that back: a tenant-safe base query, composed exactly the way CRUD composes it, that you build your aggregations on top of.
 
 ## Why This Matters

@@ -39,6 +39,7 @@ Rhino auto-generates a complete REST API from your model definitions. Here is ev
 | 24 | **Middleware Support** | Global model middleware (`$middleware`) and per-action middleware (`$middlewareActions`). |
 | 25 | **Action Exclusion** | `$exceptActions` to disable specific CRUD routes per model. |
 | 26 | **Generator CLI** | `rhino:install` (setup), `rhino:generate` (scaffold model/policy/scope), `rhino:export-postman` (API collection), `invitation:link` (test invitations). |
+| 26b | **Computed Attributes** | Three hooks: `rhinoComputedAttributes()` (always-on per row), `rhinoRecordComputedAttributes()` (opt-in per row via `?computed_attributes=a,b` on index/show/trashed), **static** `rhinoCollectionComputedAttributes()` (aggregates, once per request, via `GET /{resource}/computed?attributes=a,b`). All policy-gated by `permittedAttributesForShow()`/`hiddenAttributesForShow()`; unknown or denied name → 403. NEVER write a custom controller for a per-resource count. |
 | 27 | **Postman Export** | Auto-generated Postman Collection v2.1 with all endpoints, auth, example bodies, and filter/sort/include variants. |
 | 28 | **Blueprint (YAML Code Generation)** | Define models, columns, relationships, and role-based permissions in YAML files. `rhino:blueprint` generates models, migrations, factories, policies, tests, and seeders from these definitions. Incremental via manifest tracking. |
 | 29 | **Resource-Scope Resolver (custom controllers)** | `Rhino::query(Model::class)` returns the SAME tenant-scoped + global-scoped Eloquent `Builder` CRUD uses, for dashboards/reports/aggregations. Direct mode (ambient org+user from request); explicit mode `Rhino::forUser($u)->inOrganization($o)->query()`/`->run(fn)` for jobs/commands/tests. Fails CLOSED — throws `MissingTenantContext` with no org (raw queries fail OPEN). Controller trait `InteractsWithRhinoResources`: `$this->scoped()`, `$this->ifCanView()`. Resolver scopes ROWS; policies (`Gate::authorize('viewAny', …)`) authorize ACCESS — do both. |
@@ -624,6 +625,66 @@ class Contract extends RhinoModel
 ```
 
 **IMPORTANT:** Do NOT override `asRhinoJson()` directly — merging attributes after `parent::asRhinoJson()` adds them AFTER policy filtering, bypassing security. Always use `rhinoComputedAttributes()`.
+
+**IMPORTANT:** `rhinoComputedAttributes()` runs on EVERY row of EVERY read. Only put cheap, column-derived values here. There are two other hooks:
+
+#### `rhinoRecordComputedAttributes()` — Opt-in per-row attributes
+
+For per-row values that cost a query. Evaluated ONLY when the client sends `?computed_attributes=name`. Map of name => `callable($record, $user)`:
+
+```php
+public function rhinoRecordComputedAttributes(): array
+{
+    return [
+        'open_tickets_count' => fn ($record, $user) => $record->tickets()->whereNull('closed_at')->count(),
+    ];
+}
+```
+
+```bash
+GET /api/users?computed_attributes=open_tickets_count       # index
+GET /api/users/42?computed_attributes=open_tickets_count    # show
+GET /api/users/trashed?computed_attributes=open_tickets_count
+```
+
+#### `rhinoCollectionComputedAttributes()` — Aggregates (counts/sums) — NEVER write a controller for these
+
+**STATIC** method. Each callable is evaluated ONCE per request over the fully scoped query, not once per row. Declaring at least one registers `GET /api/{resource}/computed`:
+
+```php
+public static function rhinoCollectionComputedAttributes(): array
+{
+    return [
+        'active_users_count' => fn ($query, $user) => $query->where('status', 'active')->count(),
+        'blocked_users_count' => fn ($query, $user) => $query->where('status', 'blocked')->count(),
+    ];
+}
+```
+
+```bash
+GET /api/users/computed?attributes=active_users_count,blocked_users_count
+# → { "data": { "active_users_count": 128, "blocked_users_count": 4 } }
+GET /api/users/computed          # all declared attributes the policy allows
+```
+
+The `$query` already has: organization scope, global scopes, `?scope=`, `?filter[]=`, `?search=`. NOT applied: sort, fields, includes, pagination. Each attribute gets its own clone. Gated by `viewAny`. Disable with `'computed'` in `$exceptActions`.
+
+**ANTI-PATTERN — do NOT do either of these:**
+
+```php
+// ❌ A custom controller for a count. Bypasses org scoping, policy attribute
+//    filtering, ?filter[]/?search=/?scope=. Use rhinoCollectionComputedAttributes().
+class DashboardController { public function stats() { return ['open' => Ticket::where('status','open')->count()]; } }
+
+// ❌ An aggregate as a PER-RECORD attribute. Runs the same COUNT(*) once per
+//    row and returns the same number on every row.
+public function rhinoComputedAttributes(): array
+{
+    return ['open_tickets_count' => Ticket::where('status', 'open')->count()];
+}
+```
+
+**Policy gating (both new kinds):** `permittedAttributesForShow()` returning `['*']` allows all; any other value is a whitelist the attribute name must appear in. `hiddenAttributesForShow()` blacklists and always wins. Undeclared AND policy-denied names both return **403 `Computed attribute 'x' is not allowed`** (no info leak). With `?attributes=` omitted, denied attributes are silently left out.
 
 ### HasAutoScope Trait
 
@@ -3205,7 +3266,10 @@ It auto-registers the model in your config file.
 
 **Q: How do I add computed/virtual attributes to API responses?**
 
-A: Override `rhinoComputedAttributes()` in your model: `public function rhinoComputedAttributes(): array { return ['my_attr' => $this->myMethod()]; }`. These are merged BEFORE policy filtering so they respect blacklist/whitelist. Do NOT override `asRhinoJson()` directly — merging after `parent::asRhinoJson()` bypasses policy security.
+A: Three hooks, chosen by cost. Cheap + per row → `rhinoComputedAttributes()` (always on). Costs a query per row → `rhinoRecordComputedAttributes()` (opt-in via `?computed_attributes=`). One number for the whole collection → **static** `rhinoCollectionComputedAttributes()`, served by `GET /api/{resource}/computed?attributes=a,b`. All are merged BEFORE policy filtering so they respect blacklist/whitelist. Do NOT override `asRhinoJson()` directly — merging after `parent::asRhinoJson()` bypasses policy security.
+
+**Q: How do I return a count/aggregate (e.g. how many users are active)?**
+A: Declare it in the **static** `rhinoCollectionComputedAttributes()` and fetch it at `GET /api/{resource}/computed?attributes=active_users_count`. It is evaluated once per request over the org-scoped, filtered query. Do NOT write a custom controller for this, and do NOT declare it as a per-record computed attribute (that runs the same query once per row).
 
 **Q: How do I exclude a CRUD action from being generated?**
 

@@ -22,6 +22,7 @@ interface ModelQueryOptions {
   fields?: string[];
   search?: string;
   scope?: string;
+  computedAttributes?: string[];
   page?: number;
   perPage?: number;
 }
@@ -529,6 +530,98 @@ function AvailableRoutes() {
 ```
 
 The client sends only `?scope=availableForDrivers`; the server resolves the current user and applies the complex joins, returning exactly the routes that driver may take. The client never sends user identity.
+
+## Computed Attributes
+
+Servers can expose values that aren't database columns. Two of the three kinds are **opt-in**, so you only pay for what you ask for.
+
+### Per-record attributes — `computedAttributes`
+
+Pass the attribute names you want merged into each returned record. Nothing is computed server-side unless you name it:
+
+```tsx title="src/components/UserList.tsx"
+import { useModelIndex } from '@rhino-dev/rhino-react';
+
+function UserList() {
+  const { data: response } = useModelIndex('users', {
+    computedAttributes: ['full_name', 'avatar_url'],
+  });
+
+  return (
+    <ul>
+      {(response?.data ?? []).map(user => (
+        <li key={user.id}>
+          <img src={user.avatar_url} alt="" />
+          {user.full_name}
+        </li>
+      ))}
+    </ul>
+  );
+}
+```
+
+Works on `useModelIndex`, `useModelShow` and `useModelTrashed`. Serialized as `?computed_attributes=full_name,avatar_url`.
+
+Requesting an attribute the model doesn't declare — or that your role isn't allowed to read — returns **403**, so a typo surfaces immediately rather than silently returning nothing.
+
+### Collection aggregates — `useModelComputedAttributes`
+
+For counts, sums and averages over the **whole collection**, use the dedicated hook. Each attribute is evaluated **once per request** on the server rather than once per row, which is what makes it cheap:
+
+```tsx title="src/components/UserStats.tsx"
+import { useModelComputedAttributes } from '@rhino-dev/rhino-react';
+
+function UserStats() {
+  const { data: stats, isLoading } = useModelComputedAttributes('users', {
+    attributes: ['active_users_count', 'blocked_users_count'],
+  });
+
+  if (isLoading) return <Spinner />;
+
+  return (
+    <dl>
+      <dt>Active</dt><dd>{stats?.active_users_count}</dd>
+      <dt>Blocked</dt><dd>{stats?.blocked_users_count}</dd>
+    </dl>
+  );
+}
+```
+
+The hook returns the attribute object itself — `{ active_users_count: 128, blocked_users_count: 4 }`. Omit `attributes` to fetch every attribute your role is allowed to read.
+
+`filters`, `search` and `scope` narrow the set the aggregates describe, exactly as they narrow `useModelIndex`. Pass the same values to both hooks and the numbers describe the list the user is actually looking at:
+
+```tsx title="src/components/FilteredUsers.tsx"
+function FilteredUsers({ teamId, term }) {
+  const query = { filters: { team_id: teamId }, search: term };
+
+  const { data: users } = useModelIndex('users', query);
+  const { data: stats } = useModelComputedAttributes('users', {
+    ...query,
+    attributes: ['active_users_count'],
+  });
+
+  return (
+    <>
+      <h2>{stats?.active_users_count} active in this team</h2>
+      <UserTable rows={users?.data ?? []} />
+    </>
+  );
+}
+```
+
+```tsx title="ComputedAttributesOptions"
+interface ComputedAttributesOptions {
+  attributes?: string[];
+  filters?: Record<string, any>;
+  search?: string;
+  scope?: string;
+}
+```
+
+:::tip Don't compute counts per row
+If you find yourself declaring a count as a per-record computed attribute, move it to a collection attribute — the server would otherwise run the same query once for every row on the page.
+:::
 
 ## Pagination
 

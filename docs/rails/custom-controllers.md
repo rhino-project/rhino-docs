@@ -7,6 +7,10 @@ title: Custom Controllers
 
 Rhino auto-generates a complete, tenant-safe CRUD API for every model you register — index, show, store, update, destroy, plus soft-delete and audit endpoints. That covers most of what an app needs.
 
+:::warning First check whether you need a controller at all
+Counts, sums and other **aggregates over one resource** do **not** need a controller — that is what [Computed Attributes](./computed-attributes) are for. `GET /api/tickets/computed?attributes=open_tickets_count` is org-scoped, policy-filtered, and narrowed by the same `?filter[]`/`?search=`/`?scope=` as the listing, all for a few lines on the model. Reach for a controller when the shape genuinely isn't "attributes of one resource" — cross-model reports, non-CRUD workflows, bulk operations.
+:::
+
 But real apps eventually need logic that isn't CRUD: a dashboard that aggregates across several resources, a report that groups and sums, a computed summary, a bulk operation. None of that fits the generated endpoints, so you reach for a **custom controller** — a plain Rails controller you write by hand.
 
 The moment you do, you leave the safety of the generated pipeline. This page is about writing that controller so it stays as tenant-isolated as the CRUD Rhino gives you for free — using the `Rhino.query` resolver.

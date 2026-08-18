@@ -461,6 +461,10 @@ end
 
 You can also use `permitted_attributes_for_show` to whitelist which attributes (including computed ones) each role can see.
 
+:::tip Expensive values and aggregates have their own hooks
+`rhino_computed_attributes` runs on **every** row of **every** read. For per-row values that cost a query, and for collection-wide aggregates such as `active_users_count`, use the opt-in and collection-level hooks instead — see [Computed Attributes](./computed-attributes). Never write a custom controller just to return a count.
+:::
+
 ---
 
 ### HasAutoScope

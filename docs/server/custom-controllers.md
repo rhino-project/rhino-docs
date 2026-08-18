@@ -9,6 +9,10 @@ Rhino auto-generates a full CRUD API from your model definitions — index, show
 
 The moment you hand-write a controller, you leave the paved road. This page shows how to write custom controllers that stay tenant-isolated **by construction**, using the resource-scope resolver behind the `Rhino` facade.
 
+:::warning First check whether you need a controller at all
+Counts, sums and other **aggregates over one resource** do **not** need a controller — that is what [Computed Attributes](./computed-attributes) are for. `GET /api/tickets/computed?attributes=open_tickets_count` is org-scoped, policy-filtered, and narrowed by the same `?filter[]`/`?search=`/`?scope=` as the listing, all for a few lines on the model. Reach for a controller when the shape genuinely isn't "attributes of one resource" — cross-model reports, non-CRUD workflows, bulk operations.
+:::
+
 ## Why This Matters
 
 Rhino's CRUD is tenant-safe because it applies organization scoping, policies, and your global scopes to every query in **one place** — the `GlobalController`. You never touch a query, so you can never forget a `where organization_id = …`.
@@ -242,3 +246,4 @@ Now `GET /api/acme-corp/dashboard` returns aggregates for Acme Corp only — the
 - [Multi-Tenancy](./multi-tenancy.md) — how organization scoping works, direct and nested (relationship-based) ownership.
 - [Policies & Permissions](./policies.md) — the `viewAny`/`Gate::authorize` checks that authorize access per resource.
 - [Querying](./querying.md) — filters, sorts, includes, and the `$allowedScopes` named scopes `scopedQuery()` builds on.
+- [Computed Attributes](./computed-attributes.md) — per-resource aggregates without a controller.

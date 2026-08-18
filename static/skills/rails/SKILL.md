@@ -42,6 +42,7 @@ Rhino auto-generates a complete REST API from your model definitions. Here is ev
 | 24 | **Middleware Support** | Global model middleware (`rhino_middleware`) and per-action middleware (`rhino_middleware_actions`). |
 | 25 | **Action Exclusion** | `rhino_except_actions` to disable specific CRUD routes per model. |
 | 26 | **Generator CLI** | `rhino:install` (setup), `rhino:generate` (scaffold model/policy/scope), `rhino:export_postman` (API collection), `invitation:link` (test invitations). |
+| 26b | **Computed Attributes** | Three hooks: `rhino_computed_attributes` (always-on per row), `rhino_record_computed_attributes` (opt-in per row via `?computed_attributes=a,b` on index/show/trashed), **class method** `self.rhino_collection_computed_attributes` (aggregates, once per request, via `GET /{resource}/computed?attributes=a,b`). All policy-gated by `permitted_attributes_for_show`/`hidden_attributes_for_show`; unknown or denied name → 403. NEVER write a custom controller for a per-resource count. |
 | 27 | **Postman Export** | Auto-generated Postman Collection v2.1 with all endpoints, auth, example bodies, and filter/sort/include variants. |
 | 28 | **Blueprint (YAML Code Generation)** | Define models, columns, relationships, and role-based permissions in YAML files. `rhino:blueprint` generates models, migrations, factories, policies, tests, and seeders from these definitions. Incremental via manifest tracking. |
 
@@ -458,6 +459,65 @@ end
 ```
 
 **IMPORTANT:** Do NOT override `as_rhino_json` directly — `super.merge(...)` adds attributes AFTER policy filtering, bypassing security. Always use `rhino_computed_attributes`.
+
+**IMPORTANT:** `rhino_computed_attributes` runs on EVERY row of EVERY read. Only put cheap, column-derived values here. There are two other hooks:
+
+#### `rhino_record_computed_attributes` — Opt-in per-row attributes
+
+For per-row values that cost a query. Evaluated ONLY when the client sends `?computed_attributes=name`. Hash of name => callable (arity 0, 1 or 2 — `record`, `user`):
+
+```ruby
+def rhino_record_computed_attributes
+  {
+    "open_tickets_count" => ->(record, _user) { record.tickets.where(closed_at: nil).count }
+  }
+end
+```
+
+```bash
+GET /api/users?computed_attributes=open_tickets_count       # index
+GET /api/users/42?computed_attributes=open_tickets_count    # show
+GET /api/users/trashed?computed_attributes=open_tickets_count
+```
+
+#### `self.rhino_collection_computed_attributes` — Aggregates (counts/sums) — NEVER write a controller for these
+
+**CLASS** method. Each callable is evaluated ONCE per request over the fully scoped relation, not once per row. Declaring at least one registers `GET /api/{resource}/computed`:
+
+```ruby
+def self.rhino_collection_computed_attributes
+  {
+    "active_users_count" => ->(scope, _user) { scope.where(status: "active").count },
+    "blocked_users_count" => ->(scope, _user) { scope.where(status: "blocked").count }
+  }
+end
+```
+
+```bash
+GET /api/users/computed?attributes=active_users_count,blocked_users_count
+# → { "data": { "active_users_count": 128, "blocked_users_count": 4 } }
+GET /api/users/computed          # all declared attributes the policy allows
+```
+
+The `scope` already has: organization scope, default scopes, `?scope=`, `?filter[]=`, `?search=`. NOT applied: sort, fields, includes, pagination. Gated by `index?`. Disable with `rhino_except_actions :computed`.
+
+**ANTI-PATTERN — do NOT do either of these:**
+
+```ruby
+# ❌ A custom controller for a count. Bypasses org scoping, policy attribute
+#    filtering, ?filter[]/?search=/?scope=. Use rhino_collection_computed_attributes.
+class DashboardController < ApplicationController
+  def stats = render(json: { open: Ticket.where(status: "open").count })
+end
+
+# ❌ An aggregate as a PER-RECORD attribute. Runs the same COUNT once per row
+#    and returns the same number on every row.
+def rhino_computed_attributes
+  { "open_tickets_count" => Ticket.where(status: "open").count }
+end
+```
+
+**Policy gating (both new kinds):** `permitted_attributes_for_show` returning `["*"]` allows all; any other value is a whitelist the attribute name must appear in. `hidden_attributes_for_show` blacklists and always wins. Undeclared AND policy-denied names both return **403 `Computed attribute 'x' is not allowed`** (no info leak). With `?attributes=` omitted, denied attributes are silently left out.
 
 ### Model Registration
 
@@ -3031,7 +3091,10 @@ A: Rhino validates using `Model.new(params)`. Without `allow_nil: true`, nil att
 A: Use `rhino_additional_hidden` on the model for always-hidden. For per-user hiding, use policy's `hidden_attributes_for_show` and `permitted_attributes_for_show`.
 
 **Q: How do I add computed/virtual attributes to API responses?**
-A: Override `rhino_computed_attributes` in your model: `def rhino_computed_attributes; { 'my_attr' => my_method }; end`. These are merged BEFORE policy filtering so they respect blacklist/whitelist. Do NOT override `as_rhino_json` directly — `super.merge` bypasses policy security.
+A: Three hooks, chosen by cost. Cheap + per row → `rhino_computed_attributes` (always on). Costs a query per row → `rhino_record_computed_attributes` (opt-in via `?computed_attributes=`). One number for the whole collection → **class** method `self.rhino_collection_computed_attributes`, served by `GET /api/{resource}/computed?attributes=a,b`. All are merged BEFORE policy filtering so they respect blacklist/whitelist. Do NOT override `as_rhino_json` directly — `super.merge` bypasses policy security.
+
+**Q: How do I return a count/aggregate (e.g. how many users are active)?**
+A: Declare it in the **class** method `self.rhino_collection_computed_attributes` and fetch it at `GET /api/{resource}/computed?attributes=active_users_count`. It is evaluated once per request over the org-scoped, filtered relation. Do NOT write a custom controller for this, and do NOT declare it as a per-record computed attribute (that runs the same query once per row).
 
 **Q: How do I exclude certain CRUD actions?**
 A: `rhino_except_actions :store, :update, :destroy` makes a read-only resource.

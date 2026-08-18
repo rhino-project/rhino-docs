@@ -48,6 +48,7 @@ In Rhino for NestJS:
 | 24 | **Middleware Support** | Per-model `middleware` and per-action `actionMiddleware` (arrays of NestJS middleware classes). |
 | 25 | **Action Exclusion** | `exceptActions` disables specific CRUD routes per model. |
 | 26 | **Generator CLI** | `npx rhino install` (setup), `npx rhino generate` (scaffold model/policy/scope stub), `npx rhino blueprint`, `npx rhino export-postman`, `npx rhino export-types`. |
+| 26b | **Computed Attributes** | Three registration options: `computedAttributes` (always-on per row), `recordComputedAttributes` (opt-in per row via `?computed_attributes=a,b` on index/show/trashed), `collectionComputedAttributes` (aggregates, awaited once per request, via `GET /{resource}/computed?attributes=a,b`). All policy-gated by `permittedAttributesForShow()`/`hiddenAttributesForShow()`; unknown, denied or prototype-key name → 403. NEVER write a custom controller for a per-resource count. |
 | 27 | **Postman Export** | Auto-generated Postman Collection v2.1 with auth, example bodies, and filter/sort/include variants. |
 | 28 | **Blueprint (YAML Code Generation)** | Define models, columns, relationships, and role-based permissions in YAML. `npx rhino blueprint` generates Prisma fragments, registrations, policies, tests, and seeders. Incremental via manifest tracking. |
 | 29 | **Custom Controllers (resource-scope resolver)** | `ResourceScopeService` gives custom controllers/jobs (dashboards, reports, aggregations — anything beyond CRUD) the SAME tenant-safe base query CRUD uses. Explicit ctx `{ user, organization }`. `scopedWhere(slug, ctx, {namedScope?})` → composed Prisma where (org filter + global scopes); helpers `count`/`aggregate`/`groupBy`/`findMany` inject it (extraWhere AND-ed under, never dropped). **Fails closed**: `belongsToOrganization` model with no `ctx.organization` → throws `RhinoException` 403 `TENANT_CONTEXT_REQUIRED` (opposite of a raw query, which fails open outside a request). Resolver scopes ROWS; still gate each resource with its policy (`viewAny`) for ACCESS. |
@@ -311,7 +312,9 @@ A model = a Prisma model + a `ModelRegistration`. Define behaviors as plain fiel
 | `hasUuid` | `boolean` | `false` | String UUID primary key. |
 | `additionalHiddenColumns` | `string[]` | `[]` | Extra columns always hidden. |
 | `auditExclude` | `string[]` | `[]` | Fields excluded from audit snapshots. |
-| `computedAttributes` | `(record, user) => Record<string, any>` | — | Virtual attributes (merged before policy filtering). |
+| `computedAttributes` | `(record, user) => Record<string, any>` | — | Always-on virtual attributes (merged before policy filtering). Runs on EVERY row of EVERY read — cheap values only. |
+| `recordComputedAttributes` | `Record<string, (record, user) => any>` | — | OPT-IN per-row attributes. Evaluated only when the client sends `?computed_attributes=a,b` (index/show/trashed). Synchronous — not awaited. |
+| `collectionComputedAttributes` | `Record<string, (ctx) => any \| Promise<any>>` | — | Aggregates over the whole collection, evaluated ONCE per request via `GET /{resource}/computed?attributes=a,b`. `ctx` = `{ where, delegate, prisma, user, organization, modelSlug }`. Awaited. |
 | `scopes` | `Type<RhinoScope>[]` | `[]` | Custom scope classes (always-on). |
 | `namedScopes` | `Record<string, Type<RhinoNamedScope>>` | `{}` | Client-selectable scopes via `?scope=name`. Each `apply(ctx)` returns a Prisma where-fragment. Non-whitelisted → 403. |
 | `defaultScope` | `string` | — | Named scope applied when no `?scope=` given (e.g. `'active'`); listing convenience, not a security boundary. |
@@ -383,6 +386,67 @@ contracts: {
   }),
 },
 ```
+
+**IMPORTANT:** `computedAttributes` runs on EVERY row of EVERY read. There are two other options:
+
+#### `recordComputedAttributes` — Opt-in per-row attributes
+
+Evaluated ONLY when the client sends `?computed_attributes=name` (`?computedAttributes=` is accepted too):
+
+```ts
+users: {
+  model: 'user',
+  recordComputedAttributes: {
+    avatarUrl: (record, _user) => buildSignedUrl(record.avatarPath),
+  },
+},
+```
+
+```bash
+GET /api/users?computed_attributes=avatarUrl       # index
+GET /api/users/42?computed_attributes=avatarUrl    # show
+GET /api/users/trashed?computed_attributes=avatarUrl
+```
+
+These are NOT awaited (they run inside serialization) — keep them to in-memory work.
+
+#### `collectionComputedAttributes` — Aggregates (counts/sums) — NEVER write a controller for these
+
+Each callable is awaited ONCE per request over the fully scoped `where`, not once per row. Declaring at least one makes `GET /api/{resource}/computed` respond:
+
+```ts
+users: {
+  model: 'user',
+  collectionComputedAttributes: {
+    activeUsersCount: (ctx) => ctx.delegate.count({ where: { ...ctx.where, status: 'active' } }),
+    blockedUsersCount: (ctx) => ctx.delegate.count({ where: { ...ctx.where, status: 'blocked' } }),
+  },
+},
+```
+
+```bash
+GET /api/users/computed?attributes=activeUsersCount,blockedUsersCount
+# → { "data": { "activeUsersCount": 128, "blockedUsersCount": 4 } }
+GET /api/users/computed          # all declared attributes the policy allows
+```
+
+`ctx.where` already has: org scope (incl. `owner` chains), model scopes, `?scope=`, `?filter[]=`, `?search=`, soft-delete filter. NOT applied: sort, fields, includes, pagination. Each attribute gets its own shallow copy. Gated by `viewAny()`. Disable with `'computed'` in `exceptActions`; a model declaring none returns 404.
+
+**ANTI-PATTERN — do NOT do either of these:**
+
+```ts
+// ❌ A custom controller for a count. Bypasses org scoping, policy attribute
+//    filtering, ?filter[]/?search=/?scope=. Use collectionComputedAttributes.
+@Controller('dashboard')
+class DashboardController {
+  @Get('stats') stats() { return this.prisma.ticket.count({ where: { status: 'open' } }); }
+}
+
+// ❌ An aggregate as a per-record attribute — same query once per row.
+computedAttributes: async (record) => ({ openCount: await prisma.ticket.count(...) }),
+```
+
+**Policy gating (both new kinds):** `permittedAttributesForShow()` returning `['*']` allows all; any other value is a whitelist the attribute name must appear in. `hiddenAttributesForShow()` blacklists and always wins. Undeclared names, policy-denied names AND prototype keys (`constructor`) all return **403 `Computed attribute 'x' is not allowed`** (no info leak). With `?attributes=` omitted, denied attributes are silently left out.
 
 ### Custom Scopes
 
@@ -1815,7 +1879,10 @@ A: No — only what differs from defaults (`paginationEnabled: true`, `perPage: 
 A: The map key is the slug: `'blog-posts': { model: 'blogPost' }` → `/api/blog-posts`.
 
 **Q: Computed/virtual attributes?**
-A: `computedAttributes: (record, user) => ({ ... })`. Merged before policy filtering, so they respect blacklist/whitelist.
+A: Three options, chosen by cost. Cheap + per row → `computedAttributes` (always on). Costs work per row → `recordComputedAttributes` (opt-in via `?computed_attributes=`). One number for the whole collection → `collectionComputedAttributes`, served by `GET /api/{resource}/computed?attributes=a,b`. All merged before policy filtering, so they respect blacklist/whitelist.
+
+**Q: How do I return a count/aggregate (e.g. how many users are active)?**
+A: Declare it in `collectionComputedAttributes` and fetch it at `GET /api/{resource}/computed?attributes=activeUsersCount`. It is awaited once per request over the org-scoped, filtered `ctx.where`. Do NOT write a custom controller for this, and do NOT declare it as a per-record computed attribute (that runs the same query once per row).
 
 **Q: Exclude CRUD actions?**
 A: `exceptActions: ['store', 'update', 'destroy']`.

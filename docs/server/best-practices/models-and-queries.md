@@ -447,6 +447,77 @@ public function scopeAssignedToMe(Builder $query, ?Authenticatable $user): Build
 Once a scope grows past a clause or two (joins, subqueries, per-role logic), keep a one-line `scopeXxx` on the model that delegates to an invokable class in `app/Models/Scopes/`, and unit-test that class in isolation. Prefer `whereHas`/`whereExists` over raw `join()` so counts and `?sort` stay correct under `paginate()`. Full pattern in [Querying — best practices for complex scopes](../querying#best-practices-for-complex-scopes).
 :::
 
+## Derived values and counts — never a controller
+
+**Principle: a value that isn't a column is still a *declaration*, not a controller.** This is the single most common place teams (and AI assistants) reach for a hand-written endpoint — "I need a count of open tickets for the dashboard" becomes a `DashboardController`, and with it goes tenant scoping, policy filtering, and every query parameter the rest of the API supports. Rhino has three declaration hooks that cover the whole space; see [Computed Attributes](../computed-attributes) for the full reference.
+
+The decision is a performance one — **how often does this value need to be evaluated?**
+
+```php title="app/Models/Ticket.php"
+// ✅ Cheap and derived from columns already loaded → always-on, per record
+public function rhinoComputedAttributes(): array
+{
+    return ['is_overdue' => $this->due_at?->isPast() ?? false];
+}
+
+// ✅ Costs a query per row → opt-in, so list endpoints don't pay for it
+//    unless the client sends ?computed_attributes=comment_count
+public function rhinoRecordComputedAttributes(): array
+{
+    return ['comment_count' => fn ($record, $user) => $record->comments()->count()];
+}
+
+// ✅ One number for the WHOLE collection → evaluated once, not once per row
+public static function rhinoCollectionComputedAttributes(): array
+{
+    return [
+        'open_tickets_count' => fn ($query, $user) => $query->where('status', 'open')->count(),
+        'urgent_tickets_count' => fn ($query, $user) => $query->where('priority', 'urgent')->count(),
+    ];
+}
+```
+
+The two mistakes to pattern-match against:
+
+```php title="app/Http/Controllers/DashboardController.php"
+// ❌ Bad — a hand-written controller for a count. It bypasses the org scope,
+//          the policy's attribute whitelist, ?filter[], ?search= and ?scope=,
+//          and it is now a second place tenant isolation can be got wrong.
+public function ticketStats()
+{
+    return response()->json([
+        'open' => Ticket::where('status', 'open')->count(), // ← every org's tickets
+    ]);
+}
+```
+
+```php title="app/Models/Ticket.php"
+// ❌ Bad — an aggregate declared as a per-record attribute. On a 25-row page
+//          this runs the SAME COUNT(*) twenty-five times and returns the same
+//          number on every row.
+public function rhinoComputedAttributes(): array
+{
+    return ['open_tickets_count' => Ticket::where('status', 'open')->count()];
+}
+```
+
+```bash title="terminal"
+# ✅ Good — one request, one COUNT per attribute, org-scoped and policy-filtered
+GET /api/acme-corp/tickets/computed?attributes=open_tickets_count,urgent_tickets_count
+# → { "data": { "open_tickets_count": 42, "urgent_tickets_count": 7 } }
+
+# Aggregates describe exactly the set the user is looking at — the same
+# ?filter[]/?search=/?scope= that narrow the listing narrow the numbers
+GET /api/acme-corp/tickets?scope=assignedToMe&filter[priority]=urgent
+GET /api/acme-corp/tickets/computed?attributes=open_tickets_count&scope=assignedToMe&filter[priority]=urgent
+```
+
+Computed attributes are governed by the **same** `permittedAttributesForShow()` / `hiddenAttributesForShow()` gate as columns, so a role that cannot see `internal_notes` can equally be denied `internal_escalation_count` — with no extra code. A hand-written controller gets none of that for free.
+
+:::tip When a controller IS the right answer
+Cross-model reports, non-CRUD workflows, and anything whose shape isn't "attributes of one resource" still belong in a controller — but route the query through Rhino's scoped resolver so tenancy and policies still apply. See [Custom Controllers](../custom-controllers).
+:::
+
 ## Everything composes
 
 Named scope, filter, sort, search, fields, include, and pagination all stack in a single request — the scope narrows first, then the rest apply on top:
@@ -459,4 +530,4 @@ This selects the caller's own tickets, keeps only open ones, sorts newest-first,
 
 ---
 
-**Next:** lock down who can read and write these fields in [Authorization](./authorization), then make the whole surface tenant-safe in [Tenant Safety](./tenant-safety). Reference docs: [Models](../models) · [Querying](../querying) · [Multi-Tenancy](../multi-tenancy). Back to the [Best Practices hub](./).
+**Next:** lock down who can read and write these fields in [Authorization](./authorization), then make the whole surface tenant-safe in [Tenant Safety](./tenant-safety). Reference docs: [Models](../models) · [Querying](../querying) · [Computed Attributes](../computed-attributes) · [Multi-Tenancy](../multi-tenancy). Back to the [Best Practices hub](./).
