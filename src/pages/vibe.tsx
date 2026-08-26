@@ -363,7 +363,7 @@ export default function VibePage(): ReactNode {
                 onClick={() => setGetAgentOpen(true)}>
                 Get Rhino
               </button>
-              <Link className="vb-btn-primary" to="/server/getting-started">
+              <Link className="vb-btn-primary" to="/laravel/getting-started">
                 Read the Docs
               </Link>
               <Link className="vb-btn-secondary" href={GITHUB_URL}>
@@ -487,7 +487,7 @@ export default function VibePage(): ReactNode {
             </div>
 
             <div className="vb-cta-buttons">
-              <Link className="vb-btn-primary" to="/server/getting-started">
+              <Link className="vb-btn-primary" to="/laravel/getting-started">
                 Read the Docs
               </Link>
               <Link className="vb-btn-secondary" href={GITHUB_URL}>

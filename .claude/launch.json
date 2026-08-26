@@ -7,6 +7,12 @@
       "runtimeArgs": ["run", "start"],
       "port": 3333,
       "autoPort": true
+    },
+    {
+      "name": "rhino-docs-serve",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "serve", "--", "--port", "3456", "--no-open"],
+      "port": 3456
     }
   ]
 }

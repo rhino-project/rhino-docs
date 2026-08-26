@@ -51,12 +51,12 @@ function FooterCol({title, items}: {title: string; items: {label: string; href: 
 
 export function CTA() {
   const introUrl = useBaseUrl('/intro');
-  const laravelUrl = useBaseUrl('/server/getting-started');
+  const laravelUrl = useBaseUrl('/laravel/getting-started');
   const railsUrl = useBaseUrl('/rails/getting-started');
   const nestjsUrl = useBaseUrl('/nestjs/getting-started');
   const reactUrl = useBaseUrl('/react/getting-started');
   const reactNativeUrl = useBaseUrl('/react-native/getting-started');
-  const blueprintUrl = useBaseUrl('/server/blueprint');
+  const blueprintUrl = useBaseUrl('/laravel/blueprint');
   return (
     <section className="ag-section" id="cta" style={{position: 'relative', overflow: 'hidden'}}>
       <div className="ag-ambient-glow" style={{top: '10%', opacity: 0.4}} />

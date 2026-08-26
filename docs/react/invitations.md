@@ -88,7 +88,7 @@ const invite = useInviteUser();
 invite.mutate({ email: 'driver@example.com', role_id: 2, route_group: 'driver' });
 ```
 
-See the server's [Route Groups → Invitations carry the group](../server/route-groups.md#invitations-carry-the-group)
+See the server's [Route Groups → Invitations carry the group](../laravel/route-groups.md#invitations-carry-the-group)
 for the backend behavior (membership population, `afterRegister` hook, and the
 inviter-must-be-a-member rule when enforcement is on).
 

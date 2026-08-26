@@ -22,7 +22,7 @@ Jump straight to the docs for your framework:
 
 Eloquent models, policies, validation, multi-tenancy.
 
-**[Get started →](./server/getting-started.md)**
+**[Get started →](./laravel/getting-started.md)**
 
 </div>
 

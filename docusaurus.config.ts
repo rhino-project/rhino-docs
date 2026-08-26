@@ -33,7 +33,7 @@ const config: Config = {
         // Scope search to the lib you're currently browsing (Laravel/Rails/NestJS/etc.).
         // Each folder becomes its own search context; searching under /rails only
         // returns Rails docs. Pages with no lib context (e.g. the intro) search all.
-        searchContextByPaths: ['server', 'rails', 'nestjs', 'react', 'react-native', 'django'],
+        searchContextByPaths: ['laravel', 'rails', 'nestjs', 'react', 'react-native'],
         useAllContextsWithNoSearchContext: true,
       },
     ],
@@ -88,7 +88,7 @@ const config: Config = {
         {
           title: 'Servers',
           items: [
-            { label: 'Laravel Server', to: '/server/getting-started' },
+            { label: 'Laravel Server', to: '/laravel/getting-started' },
             { label: 'Rails Server', to: '/rails/getting-started' },
             { label: 'NestJS Server', to: '/nestjs/getting-started' },
           ],

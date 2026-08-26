@@ -1,6 +1,6 @@
 # Rhino Docs
 
-**The right way AI agents write code.** Documentation for Rhino — automatic REST APIs for Laravel, Rails, and AdonisJS.
+**The right way AI agents write code.** Documentation for Rhino — automatic REST APIs for Laravel, Rails, and NestJS.
 
 ---
 
@@ -14,9 +14,27 @@
 |--------|-------------|
 | [**server-laravel**](https://github.com/rhino-project/rhino-laravel) | Laravel package — `rhino-project/rhino-laravel` |
 | [**server-rails**](https://github.com/rhino-project/rhino-rails) | Rails gem — `rhino` |
-| [**server-adonisjs**](https://github.com/rhino-project/rhino-adonisjs) | AdonisJS package — `@rhino-project/rhino-adonisjs` |
-| [**client-react**](https://github.com/rhino-project/rhino-react) | React / React Native client — `@rhino-project/rhino-react` |
-| [**docs**](https://github.com/rhino-project/docs) | This documentation site |
+| [**server-nestjs**](https://github.com/rhino-project/rhino-nestjs) | NestJS package — `@rhino-dev/rhino-nestjs` |
+| [**client-react**](https://github.com/rhino-project/rhino-react) | React / React Native client — `@rhino-dev/rhino-react` |
+| [**docs**](https://github.com/rhino-project/rhino-docs) | This documentation site |
+
+---
+
+## Where the docs live
+
+Markdown sources are in `docs/`, one directory per stack:
+
+| Stack | Path |
+|---|---|
+| Laravel server | `docs/laravel/` |
+| Rails server | `docs/rails/` |
+| NestJS server | `docs/nestjs/` |
+| React client | `docs/react/` |
+| React Native client | `docs/react-native/` |
+
+Each stack's `getting-started.md` is the entry point and carries a complete feature summary — start
+there. See [CLAUDE.md](./CLAUDE.md) for the conventions, including the rule that getting-started is
+updated with every feature change.
 
 ---
 

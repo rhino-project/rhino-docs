@@ -236,7 +236,7 @@ function LogoutButton() {
 ## Group-Aware Auth
 
 A Rhino backend can register the auth route set per **route group** (see the
-server's [Route Groups](../server/route-groups.md) docs). The client mirrors
+server's [Route Groups](../laravel/route-groups.md) docs). The client mirrors
 this: tell it which group is signing in and it builds **group-scoped** auth URLs.
 
 - A **prefix-based** group exposes its auth under `/{group}/auth/*` — e.g.

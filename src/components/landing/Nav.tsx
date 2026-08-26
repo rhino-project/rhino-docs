@@ -6,7 +6,7 @@ const GITHUB_URL = 'https://github.com/rhino-project';
 
 export function Nav() {
   const introUrl = useBaseUrl('/intro');
-  const laravelStartUrl = useBaseUrl('/server/getting-started');
+  const laravelStartUrl = useBaseUrl('/laravel/getting-started');
   return (
     <nav className="ag-nav">
       <div className="ag-nav-inner">

@@ -370,7 +370,7 @@ Run a seeder directly with `npx ts-node src/seeders/ContractSeeder.ts`, or wire 
 
 ## Cross-Framework Compatibility
 
-The YAML spec format is **shared across all Rhino frameworks** (Laravel, NestJS, Rails, Django). The same `.rhino/blueprints/` directory can generate framework-specific code for each target:
+The YAML spec format is **shared across all Rhino frameworks** (Laravel, NestJS, Rails). The same `.rhino/blueprints/` directory can generate framework-specific code for each target:
 
 | Concern | Laravel | NestJS |
 |---------|---------|----------|
