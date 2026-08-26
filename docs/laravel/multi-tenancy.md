@@ -29,6 +29,7 @@ Or configure it manually in `config/rhino.php`:
     ],
 ],
 'multi_tenant' => [
+    'enabled' => true,                           // master switch for organization scoping
     'organization_identifier_column' => 'slug',  // 'id', 'slug', or 'uuid'
 ],
 ```
@@ -36,6 +37,58 @@ Or configure it manually in `config/rhino.php`:
 :::tip Hybrid platforms
 For platforms that need multiple access patterns (e.g., tenant + driver + admin + public), see [Route Groups](./route-groups.md).
 :::
+
+## Single-Tenant Apps
+
+`multi_tenant.enabled` is the master switch for organization scoping. It defaults to `true`, which is
+what every tenant app wants: the [resource-scope resolver](./custom-controllers.md) **fails closed**,
+so `Rhino::query()` on an organization-scoped model with no organization context throws
+`MissingTenantContext` rather than returning every tenant's rows.
+
+Some apps genuinely have no tenant to resolve — an internal admin panel or back office where every
+operator is meant to see every organization's records, and access is decided by **roles and scopes**
+instead of by organization. Those apps have no tenant route group, so ambient `Rhino::query()` has
+nothing to resolve and would throw on any organization-owned model. Turn the switch off:
+
+```php title="config/rhino.php"
+'multi_tenant' => [
+    'enabled' => false,
+    'organization_identifier_column' => 'id',
+],
+```
+
+With it `false`, `Rhino::query()` and `Rhino::scopedQuery()` apply **no** organization filter and no
+longer throw, so the resolver works with no tenant context — in a controller, a console command or a
+queued job:
+
+```php
+use Rhino\Facades\Rhino;
+
+$open = Rhino::query(Task::class)->where('status', 'open')->count();
+$rows = Rhino::forUser($admin)->query(Task::class)->get();
+```
+
+Turning the switch off removes **only** the organization filter. Everything else that narrows a query
+still applies:
+
+| Still applies with `enabled => false` | Why |
+|---|---|
+| `App\Models\Scopes\{Model}Scope` | Your user-aware global scopes are where row-level access lives in a single-tenant app |
+| `$allowedScopes` named scopes | `Rhino::scopedQuery($model, 'availableForDrivers')` behaves identically |
+| Policies | The resolver scopes rows; `Gate::authorize()` still decides access |
+| Explicit `inOrganization($org)` | An explicitly requested organization is always honored — the caller asked for that tenant |
+
+:::warning Only for apps with no tenant boundary
+This is an app-wide switch, not a per-query one. Turning it off in a multi-tenant app removes the
+guard that turns a forgotten tenant context into a loud crash — a missing organization becomes a
+**silent cross-tenant read** instead. Leave it `true` unless every operator in the app is meant to
+see every organization's rows.
+:::
+
+Because the flag defaults to `true` when the key is absent, an app whose published config predates it
+keeps failing closed. `php artisan rhino:install` merges the key into an existing `multi_tenant`
+block, so re-running the installer adds it without discarding your
+`organization_identifier_column`.
 
 ## How It Works
 

@@ -560,11 +560,20 @@ If you're upgrading from a previous Rhino version, update your `config/rhino.php
     ],
 ],
 'multi_tenant' => [
+    'enabled' => true,
     'organization_identifier_column' => 'slug',
 ],
 ```
 
 Key changes:
 - Remove `'public'` top-level key → use a `'public'` route group instead
-- Remove `'enabled'`, `'use_subdomain'`, and `'middleware'` from `multi_tenant` → these are now expressed via `route_groups`
+- Remove `'use_subdomain'` and `'middleware'` from `multi_tenant` → these are now expressed via `route_groups`
 - Keep `'organization_identifier_column'` in `multi_tenant` (still used by middleware)
+
+:::caution `multi_tenant.enabled` is not the key it used to be
+The old `'enabled'` key switched multi-tenant **routing** on and off; that job now belongs to
+`route_groups`. The same key name is reused today for a different job: it is the master switch for
+organization **scoping** — with it `false`, `Rhino::query()` applies no organization filter and stops
+throwing `MissingTenantContext`. It defaults to `true`, and a tenant app should leave it that way. See
+[Multi-Tenancy — Single-Tenant Apps](./multi-tenancy.md#single-tenant-apps).
+:::

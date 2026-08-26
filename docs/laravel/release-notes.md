@@ -7,6 +7,44 @@ title: Release Notes
 
 Notable changes in each release of Rhino for Laravel, newest first.
 
+## 4.7.1
+
+**`Rhino::query()` in single-tenant apps.** The resource-scope resolver assumed every app is multi-tenant: any model that reached an organization — by its own column **or** through a `BelongsTo` chain — required an organization context, so `Rhino::query(Task::class)` outside a tenant route group always threw `MissingTenantContext`. An admin panel where every operator legitimately sees every organization's rows had no way to use the resolver at all, which pushed exactly the code that most needs scoping back onto raw model queries.
+
+A master flag now turns organization scoping off for the whole app:
+
+```php title="config/rhino.php"
+'multi_tenant' => [
+    'enabled' => false, // single-tenant: no organization filter, no fail-closed throw
+    'organization_identifier_column' => 'id',
+],
+```
+
+With it `false`, `Rhino::query()` and `Rhino::scopedQuery()` skip the organization filter and stop throwing, so ambient calls work with no tenant route group — and no request at all:
+
+```php
+use Rhino\Facades\Rhino;
+
+// Admin panel controller, console command or job — no organization context needed.
+$open = Rhino::query(Task::class)->where('status', 'open')->count();
+$rows = Rhino::forUser($admin)->query(Task::class)->get();
+```
+
+This is **not** an unscoped escape hatch. With the flag off:
+
+- The app's user-aware global scopes (`App\Models\Scopes\{Model}Scope`) still run, so row-level access stays with your own roles and scopes.
+- `$allowedScopes` named scopes still apply through `Rhino::scopedQuery()`.
+- An explicit `Rhino::forUser($user)->inOrganization($org)` still scopes to that organization — the caller asked for that tenant.
+- CRUD through `GlobalController` is untouched: tenant route groups resolve and scope the organization exactly as before.
+
+**`rhino:install` no longer drops the flag.** `updateConfig()` replaced the whole `multi_tenant` block with just `organization_identifier_column`, so the `enabled` key published moments earlier vanished from the app's own config file. Behavior was unaffected — the resolver defaults the flag to `true` when the key is absent — but a single-tenant app had no key to flip without hand-editing. It now merges instead of replacing, so a config that predates the flag gains it on the next install.
+
+Fully backward compatible — the flag defaults to `true`, including for installs whose published config has no such key, so multi-tenant apps keep failing closed exactly as before.
+
+Laravel only; Rails and NestJS are unchanged at 4.7.0.
+
+See [Multi-Tenancy — Single-Tenant Apps](./multi-tenancy#single-tenant-apps) and [Custom Controllers — Fail Closed](./custom-controllers#fail-closed).
+
 ## 4.7.0
 
 **Computed attributes, without the per-row cost.** Two new declaration hooks make derived values and aggregates first-class, so counts and expensive per-row values no longer need a hand-written controller.

@@ -120,7 +120,7 @@ Inside the `run()` closure you can use plain ambient `Rhino::query()` — the ex
 
 ## Fail Closed
 
-The resolver **never** returns an unscoped query for a tenant-owned model. If you call `Rhino::query()` for an organization-scoped model and there is **no** organization context — no request, no explicit `inOrganization()` — it does not silently return every tenant's rows. It **throws** `Rhino\Exceptions\MissingTenantContext`:
+In a multi-tenant app the resolver **never** returns an unscoped query for a tenant-owned model. If you call `Rhino::query()` for an organization-scoped model and there is **no** organization context — no request, no explicit `inOrganization()` — it does not silently return every tenant's rows. It **throws** `Rhino\Exceptions\MissingTenantContext`:
 
 ```php
 use Rhino\Facades\Rhino;
@@ -129,7 +129,9 @@ use Rhino\Facades\Rhino;
 Rhino::query(Task::class);
 // → throws Rhino\Exceptions\MissingTenantContext:
 //   "Rhino::query(App\Models\Task) requires an organization context but none is
-//    set. Use Rhino::forUser(...)->inOrganization(...) outside a tenant request."
+//    set. Use Rhino::forUser(...)->inOrganization(...) outside a tenant request,
+//    or set config('rhino.multi_tenant.enabled') to false if this app is
+//    single-tenant."
 ```
 
 This is the **opposite** of a raw model query, which fails **open** outside a request (returns everyone's rows). With the resolver, forgetting the tenant context is a loud crash you catch in development, not a silent cross-tenant leak in production.
@@ -137,6 +139,28 @@ This is the **opposite** of a raw model query, which fails **open** outside a re
 :::warning
 This is the entire point of the resolver. A raw `Task::all()` in a job leaks every tenant. `Rhino::query(Task::class)` in the same job throws. Always reach for the resolver.
 :::
+
+### Single-tenant apps
+
+The throw assumes there *is* a tenant boundary to protect. An app with no tenant route group — an internal admin panel where every operator sees every organization's rows, and access is decided by roles and scopes instead — has no organization to resolve, so every ambient call on an org-owned model would throw and the resolver would be unusable.
+
+Setting the app-wide switch to `false` removes the organization filter and the throw together:
+
+```php title="config/rhino.php"
+'multi_tenant' => [
+    'enabled' => false,
+],
+```
+
+```php
+// Now valid with no tenant context at all — controller, command or job:
+$open = Rhino::query(Task::class)->where('status', 'open')->count();
+$rows = Rhino::forUser($admin)->query(Task::class)->get();
+```
+
+It removes **only** the organization filter. Your `App\Models\Scopes\{Model}Scope` global scopes still run, `$allowedScopes` named scopes still apply through `scopedQuery()`, policies still gate access, and an explicit `inOrganization($org)` still scopes to that organization. So the resolver remains the right entry point in a single-tenant app — it is still the thing applying your user-aware scopes, which a raw model query would skip.
+
+The flag defaults to `true`, so leaving it alone (or omitting the key) keeps the fail-closed behavior above. See [Multi-Tenancy — Single-Tenant Apps](./multi-tenancy.md#single-tenant-apps) for the full picture and the caveat.
 
 ## Worked Example: A Tenant-Safe Dashboard
 
@@ -243,7 +267,7 @@ Now `GET /api/acme-corp/dashboard` returns aggregates for Acme Corp only — the
 
 ## Related
 
-- [Multi-Tenancy](./multi-tenancy.md) — how organization scoping works, direct and nested (relationship-based) ownership.
+- [Multi-Tenancy](./multi-tenancy.md) — how organization scoping works, direct and nested (relationship-based) ownership, and the `multi_tenant.enabled` switch for single-tenant apps.
 - [Policies & Permissions](./policies.md) — the `viewAny`/`Gate::authorize` checks that authorize access per resource.
 - [Querying](./querying.md) — filters, sorts, includes, and the `$allowedScopes` named scopes `scopedQuery()` builds on.
 - [Computed Attributes](./computed-attributes.md) — per-resource aggregates without a controller.

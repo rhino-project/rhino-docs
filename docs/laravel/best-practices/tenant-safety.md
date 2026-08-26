@@ -282,7 +282,9 @@ use Rhino\Facades\Rhino;
 Rhino::query(Ticket::class);
 // → throws Rhino\Exceptions\MissingTenantContext:
 //   "Rhino::query(App\Models\Ticket) requires an organization context but none is
-//    set. Use Rhino::forUser(...)->inOrganization(...) outside a tenant request."
+//    set. Use Rhino::forUser(...)->inOrganization(...) outside a tenant request,
+//    or set config('rhino.multi_tenant.enabled') to false if this app is
+//    single-tenant."
 ```
 
 This is the **opposite** of a raw model query, which fails **open** outside a request. Forgetting the tenant context becomes a loud crash you catch in development — not a silent cross-tenant leak in production.
@@ -290,6 +292,8 @@ This is the **opposite** of a raw model query, which fails **open** outside a re
 :::danger This is the entire reason the resolver exists
 A raw `Ticket::all()` in a job leaks every tenant. `Rhino::query(Ticket::class)` in the same job throws. Always reach for the resolver.
 :::
+
+This property is what `multi_tenant.enabled` controls, and Helpdesk leaves it at its `true` default — as any app with a tenant boundary must. An app with **no** tenant boundary (an internal back office where every operator sees every organization) sets it `false` and trades the throw for an unfiltered base query; see [Multi-Tenancy — Single-Tenant Apps](../multi-tenancy.md#single-tenant-apps). Note that "single-tenant" there means the whole app, not Helpdesk's `app` **route group** below — Helpdesk gets its unscoped catalog queries from `Category` being a global model, not from a config flag.
 
 ## Single-tenant vs multitenant in the hybrid Helpdesk
 
@@ -324,7 +328,7 @@ That asymmetry is the safety net: you cannot accidentally read tenant data from 
 - `Ticket` is scoped by **column**; `TicketComment` by **relationship chain** (auto-detected). Don't hand-write either — the resolver rebuilds the correct query.
 - `Category` / `Plan` / `Article` are **global by design** and live in the `app` group. Don't org-scope them; don't globalize `Ticket`.
 - Generated CRUD is tenant-safe for free. **Custom controllers** must go through `Rhino::query()` / `Rhino::scopedQuery()` (direct) or `Rhino::forUser()->inOrganization()` / `->run()` (explicit) — **never** `Ticket::query()` or `DB::table()`.
-- The resolver **fails closed** (`MissingTenantContext`); raw queries **fail open**. Scope authorizes rows; **policies** authorize access — do both.
+- The resolver **fails closed** (`MissingTenantContext`); raw queries **fail open**. Keep `multi_tenant.enabled` at its `true` default — Helpdesk has a tenant boundary, so turning it off would remove that guard. Scope authorizes rows; **policies** authorize access — do both.
 
 ## Related
 

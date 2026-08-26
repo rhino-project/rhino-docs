@@ -73,10 +73,10 @@ return [
 
     // Multi-tenancy settings
     'multi_tenant' => [
-        'enabled' => false,                        // Enable organization scoping
-        'use_subdomain' => false,                  // true = subdomain, false = URL prefix
+        'enabled' => true,                         // Master switch for organization scoping.
+                                                   // false = single-tenant: Rhino::query() applies
+                                                   // no org filter and never throws.
         'organization_identifier_column' => 'id',  // 'id', 'slug', or 'uuid'
-        'middleware' => null,                       // Custom middleware class
     ],
 
     // Column matched by {id} on member routes (default: each model's primary key)
@@ -356,7 +356,9 @@ Outside a tenant context, permissions come from `users.permissions`. Use
 create. Models without an org column are scoped through their `BelongsTo` chain, auto-detected up to
 three levels deep. The organization is resolved from a URL prefix (`/api/{organization}/…`) or a
 subdomain, matched on `id`, `slug` or `uuid`. Unknown org, or an org the user doesn't belong to → `404`.
-See [Multi-Tenancy](./multi-tenancy).
+Apps with no tenant boundary at all — an admin panel where every operator sees every organization's
+rows — set `multi_tenant.enabled => false` to drop the organization filter while keeping their own
+scopes and policies. See [Multi-Tenancy](./multi-tenancy).
 
 ### 8. Route groups
 
@@ -401,8 +403,10 @@ use Rhino\Facades\Rhino;
 $open = Rhino::query(Task::class)->where('status', 'open')->count();
 ```
 
-A raw `Task::where(...)` is unscoped outside a request and will return every tenant's rows. See
-[Custom Controllers](./custom-controllers).
+A raw `Task::where(...)` is unscoped outside a request and will return every tenant's rows. The
+resolver fails closed instead — it throws `MissingTenantContext` rather than returning them — unless
+the app is single-tenant (`multi_tenant.enabled => false`), where it applies your global scopes
+without an organization filter. See [Custom Controllers](./custom-controllers).
 
 ### 12. Code generation & tooling
 
