@@ -18,6 +18,7 @@ Define route groups in `config/rhino.php`:
         'domain' => null,                    // optional host constraint (see Domain Constraints)
         'middleware' => [SomeMiddleware::class], // middleware stack (on top of auth:sanctum)
         'models' => '*',                     // '*' for all models, or ['posts', 'comments']
+        'tenant' => true,                    // false = the group has no tenant boundary (see Tenant Boundary)
         'auth' => false,                     // register a group-tagged auth route set (see Group membership & auth)
         'hooks' => null,                     // optional lifecycle hooks class (see Group membership & auth)
     ],
@@ -30,6 +31,7 @@ Define route groups in `config/rhino.php`:
 | `domain`     | string \| null   | `null`  | Optional host constraint (see [Domain Constraints](#domain-constraints))                 |
 | `middleware` | array            | `[]`    | Middleware stack applied on top of `auth:sanctum`                                        |
 | `models`     | `'*'` \| array   | —       | `'*'` for all registered models, or an array of model slugs                              |
+| `tenant`     | bool             | `true`  | `false` declares the group has no tenant boundary (see [Tenant Boundary](#tenant-boundary)) |
 | `auth`       | bool             | `false` | Register the full auth route set under this group's prefix/domain, tagged with the group |
 | `hooks`      | class-string     | `null`  | A `Rhino\Contracts\AuthLifecycleHooks` class run after each auth action for the group    |
 
@@ -384,6 +386,44 @@ Organization scoping is **implicit**, not configured per group. The GlobalContro
 
 This means you don't need any extra configuration for non-tenant groups to bypass org scoping — it happens naturally.
 
+## Tenant Boundary
+
+CRUD scoping is implicit, as above — but the [resource-scope resolver](./custom-controllers.md) used
+by your **own** controllers cannot guess. `Rhino::query()` fails closed: an organization-scoped model
+queried with no organization throws `MissingTenantContext` rather than returning every tenant's rows.
+In a group that has no organization to resolve, that throw is wrong — so say so:
+
+```php title="config/rhino.php"
+'admin' => [
+    'prefix' => 'admin',
+    'tenant' => false, // queries here legitimately span every organization
+    'middleware' => [],
+    'models' => [],
+],
+```
+
+In a `'tenant' => false` group, `Rhino::query()` and `Rhino::scopedQuery()` apply no organization
+filter and do not throw. Every other group is unchanged and still fails closed, including the tenant
+groups in the same app.
+
+The group is read from the matched route's `route_group` default — the same value memberships and
+policies use. Rhino's generated CRUD routes carry it; tag your own routes:
+
+```php title="routes/api.php"
+Route::middleware(['auth:sanctum'])
+    ->get('admin/dashboard', [AdminDashboardController::class, 'summary'])
+    ->defaults('route_group', 'admin');
+```
+
+Register those routes **above** any `{organization}`-prefixed route, or `/api/admin/dashboard` is
+matched as the tenant route with `{organization} = 'admin'`.
+
+Outside a request — a queued job, a console command — no group resolves, so the resolver keeps
+failing closed there regardless of this key. Pass the tenant explicitly with
+`Rhino::forUser($user)->inOrganization($org)`.
+
+See [Multi-Tenancy — Route Groups Without a Tenant Boundary](./multi-tenancy.md#route-groups-without-a-tenant-boundary).
+
 ## Custom Scoping for Non-Tenant Groups
 
 For groups like `driver` that need custom data filtering (e.g., a driver only sees their own trips), use standard Laravel global scopes:
@@ -560,7 +600,6 @@ If you're upgrading from a previous Rhino version, update your `config/rhino.php
     ],
 ],
 'multi_tenant' => [
-    'enabled' => true,
     'organization_identifier_column' => 'slug',
 ],
 ```
@@ -570,10 +609,9 @@ Key changes:
 - Remove `'use_subdomain'` and `'middleware'` from `multi_tenant` → these are now expressed via `route_groups`
 - Keep `'organization_identifier_column'` in `multi_tenant` (still used by middleware)
 
-:::caution `multi_tenant.enabled` is not the key it used to be
+:::caution Removing `multi_tenant.enabled`
 The old `'enabled'` key switched multi-tenant **routing** on and off; that job now belongs to
-`route_groups`. The same key name is reused today for a different job: it is the master switch for
-organization **scoping** — with it `false`, `Rhino::query()` applies no organization filter and stops
-throwing `MissingTenantContext`. It defaults to `true`, and a tenant app should leave it that way. See
-[Multi-Tenancy — Single-Tenant Apps](./multi-tenancy.md#single-tenant-apps).
+`route_groups`, and the key is gone. Organization **scoping** is declared per group instead: a group
+with no tenant boundary sets `'tenant' => false`, and every other group keeps failing closed. See
+[Tenant Boundary](#tenant-boundary).
 :::

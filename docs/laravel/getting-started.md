@@ -73,9 +73,6 @@ return [
 
     // Multi-tenancy settings
     'multi_tenant' => [
-        'enabled' => true,                         // Master switch for organization scoping.
-                                                   // false = single-tenant: Rhino::query() applies
-                                                   // no org filter and never throws.
         'organization_identifier_column' => 'id',  // 'id', 'slug', or 'uuid'
     ],
 
@@ -356,16 +353,17 @@ Outside a tenant context, permissions come from `users.permissions`. Use
 create. Models without an org column are scoped through their `BelongsTo` chain, auto-detected up to
 three levels deep. The organization is resolved from a URL prefix (`/api/{organization}/…`) or a
 subdomain, matched on `id`, `slug` or `uuid`. Unknown org, or an org the user doesn't belong to → `404`.
-Apps with no tenant boundary at all — an admin panel where every operator sees every organization's
-rows — set `multi_tenant.enabled => false` to drop the organization filter while keeping their own
-scopes and policies. See [Multi-Tenancy](./multi-tenancy).
+A route group with no tenant boundary — a back office where every operator sees every organization's
+rows — declares `'tenant' => false`, which drops the organization filter for that group only while
+keeping its own scopes and policies. See [Multi-Tenancy](./multi-tenancy).
 
 ### 8. Route groups
 
 One set of models, several URL contexts — a tenant dashboard, a driver app, an admin panel, a public
 read-only API — each with its own prefix, optional host constraint, middleware, model subset, auth
-route set and lifecycle hooks. `'tenant'` and `'public'` are reserved names. Conflicting groups throw
-at boot. See [Route Groups](./route-groups).
+route set, lifecycle hooks and tenant boundary (`'tenant' => false` for a group that spans every
+organization). `'tenant'` and `'public'` are reserved names. Conflicting groups throw at boot. See
+[Route Groups](./route-groups).
 
 ### 9. Data lifecycle
 
@@ -405,8 +403,8 @@ $open = Rhino::query(Task::class)->where('status', 'open')->count();
 
 A raw `Task::where(...)` is unscoped outside a request and will return every tenant's rows. The
 resolver fails closed instead — it throws `MissingTenantContext` rather than returning them — unless
-the app is single-tenant (`multi_tenant.enabled => false`), where it applies your global scopes
-without an organization filter. See [Custom Controllers](./custom-controllers).
+the request is served by a route group declared `'tenant' => false`, where it applies your global
+scopes without an organization filter. See [Custom Controllers](./custom-controllers).
 
 ### 12. Code generation & tooling
 

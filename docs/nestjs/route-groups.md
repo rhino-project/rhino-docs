@@ -77,7 +77,7 @@ A route group (`RouteGroupConfig`) accepts:
 | `skipAuth` | `boolean` | `false` | Skip the JWT guard for this group (used by the reserved `public` group) |
 | `auth` | `boolean` | `false` | Register a group-tagged auth route set (see [Group membership & auth](#group-membership--auth)) |
 | `hooks` | `Type<AuthLifecycleHooks> \| AuthLifecycleHooks` | — | Per-group lifecycle hooks (see [Group membership & auth](#group-membership--auth)) |
-| `tenant` | `boolean` | inferred | Whether the group is org-scoped. When omitted, a group is a tenant group iff multi-tenancy is enabled; set `tenant: false` for org-less groups (e.g. `admin`, `driver`) when multi-tenancy is on |
+| `tenant` | `boolean` | inferred | Whether the group is org-scoped. When omitted, a group is a tenant group iff multi-tenancy is enabled; set `tenant: false` for org-less groups (e.g. `admin`, `driver`) when multi-tenancy is on. `tenant: false` also lifts the resource-scope resolver's tenant requirement for the group — see [Tenant Boundary](#tenant-boundary) |
 
 ### Reserved Group Names
 
@@ -389,6 +389,48 @@ This means:
 - `tenant` group routes get org scoping automatically (their middleware sets `req.organization`).
 - Non-tenant group routes skip org scoping naturally (no middleware sets an org).
 - **No configuration flag needed** -- the behavior is implicit based on the middleware stack.
+
+## Tenant Boundary
+
+CRUD scoping is implicit, as above — but the [resource-scope resolver](./custom-controllers.md) used
+by your **own** controllers cannot guess. `ResourceScopeService` fails closed: an org-scoped model
+queried with no `ctx.organization` throws `403 TENANT_CONTEXT_REQUIRED` rather than returning every
+tenant's rows. In a group that has no organization to resolve, that throw is wrong — so say so:
+
+```ts title="src/rhino.config.ts"
+routeGroups: {
+  tenant: { prefix: ':organization', middleware: [ResolveOrganizationMiddleware], models: '*' },
+  admin:  { prefix: 'admin', tenant: false, models: [] }, // spans every organization
+},
+```
+
+In a `tenant: false` group the resolver applies no organization filter and does not throw. Every
+other group is unchanged and still fails closed, including the tenant groups in the same app.
+
+The resolver reads the group from `ctx.routeGroup`. `RouteGroupMiddleware` already puts it on every
+request as `req.__routeGroup`, so a custom controller just passes it through:
+
+```ts title="src/admin/admin-dashboard.controller.ts"
+@Controller('admin')
+export class AdminDashboardController {
+  constructor(private readonly scope: ResourceScopeService) {}
+
+  @Get('dashboard')
+  async summary(@Req() req: any) {
+    const ctx = { user: req.user, routeGroup: req.__routeGroup };
+    return { tasks_total: await this.scope.count('tasks', ctx) }; // every organization
+  }
+}
+```
+
+Declaring the group also makes its prefix a **reserved segment** for
+`createTenantRouteRewrite`, so `/api/admin/dashboard` is never mistaken for an organization slug and
+rewritten (or rejected as an unknown tenant).
+
+A context with no `routeGroup` — a queued job, a script, a controller that forgets to pass it — keeps
+failing closed. Pass `ctx.organization` explicitly there.
+
+See [Multi-Tenancy — Route Groups Without a Tenant Boundary](./multi-tenancy.md#route-groups-without-a-tenant-boundary).
 
 ## Custom Scoping for Non-Tenant Groups
 

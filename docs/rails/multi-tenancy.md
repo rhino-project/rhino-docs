@@ -33,6 +33,87 @@ end
 For platforms that need both tenant and non-tenant routes (e.g., customer dashboard + driver app + admin panel), see [Route Groups](./route-groups.md).
 :::
 
+## Route Groups Without a Tenant Boundary
+
+Every [route group](./route-groups.md) is a tenant group by default, which is what a tenant app
+wants: the [resource-scope resolver](./custom-controllers.md) **fails closed**, so `Rhino.query` on an
+organization-scopable model with no organization context raises `Rhino::MissingTenantContext` rather
+than returning every tenant's rows.
+
+Some groups genuinely have no tenant to resolve — a back office or admin group whose operators are
+meant to see every organization's records, with access decided by **roles and scopes** instead of by
+organization. Declare the group non-tenant:
+
+```ruby title="config/initializers/rhino.rb"
+config.route_group :tenant,
+  prefix: ":organization",
+  middleware: [Rhino::Middleware::ResolveOrganizationFromRoute],
+  models: :all
+
+config.route_group :admin,
+  prefix: "admin",
+  tenant: false,   # no tenant boundary: queries here span every organization
+  models: []
+```
+
+Inside that group, `Rhino.query` and `Rhino.scoped_query` apply **no** organization filter and no
+longer raise. The `:tenant` group in the same app is untouched and keeps failing closed — that is the
+point of putting the switch on the group rather than on the app.
+
+### Publishing the group from a custom controller
+
+The resolver reads the group from the request's `route_group`, the same value memberships and
+policies use. Rhino's own controllers publish it; a controller you write includes the concern:
+
+```ruby title="app/controllers/admin_dashboard_controller.rb"
+class AdminDashboardController < ApplicationController
+  include Rhino::RouteGroupContext
+  rhino_route_group :admin
+
+  def summary
+    render json: { tasks_total: Rhino.query(Task).count }
+  end
+end
+```
+
+Without an explicit `rhino_route_group`, the concern falls back to the route's own default:
+
+```ruby title="config/routes.rb"
+get "/api/admin/dashboard", to: "admin_dashboard#summary",
+                            defaults: { route_group: "admin" }
+```
+
+Declare non-tenant routes **before** any `:organization`-prefixed route, or `/api/admin/dashboard`
+matches the tenant route with `:organization = "admin"` and 404s as an unknown organization.
+
+### What declaring a group non-tenant does not change
+
+It removes **only** the organization filter, and only for requests served by that group:
+
+| Still applies in a `tenant: false` group | Why |
+|---|---|
+| The model's `default_scope` / auto-scopes | Your user-aware scopes are where row-level access lives when there is no organization |
+| `allowed_scopes` named scopes | `Rhino.scoped_query(Model, "published")` behaves identically |
+| Policies | The resolver scopes rows; Pundit still decides access |
+| Explicit `in_organization(org)` | An explicitly requested organization is always honored — the caller asked for that tenant |
+| CRUD through the Rhino controllers | Tenant groups resolve and scope the organization exactly as before |
+
+Everything that is **not** provably a non-tenant group keeps failing closed — an unknown group, a
+request with no group, and any code running outside a request at all:
+
+```ruby
+# An Active Job or rake task resolves no route group, so this still raises
+# Rhino::MissingTenantContext. Pass the tenant explicitly instead.
+Rhino.for_user(admin).in_organization(org).query(Task)
+```
+
+:::warning Only for groups with no tenant boundary
+`tenant: false` removes the guard that turns a forgotten tenant context into a loud crash — for that
+group, a missing organization becomes a **silent cross-tenant read** instead. Declare it only on
+groups where every operator is meant to see every organization's rows, and keep those groups' model
+lists narrow (`models: []` when the group only serves custom controllers).
+:::
+
 ## How It Works
 
 When a `:tenant` route group is configured, all routes in that group include the organization:

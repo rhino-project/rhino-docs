@@ -7,43 +7,89 @@ title: Release Notes
 
 Notable changes in each release of Rhino for Laravel, newest first.
 
-## 4.7.1
+## 4.7.2
 
-**`Rhino::query()` in single-tenant apps.** The resource-scope resolver assumed every app is multi-tenant: any model that reached an organization — by its own column **or** through a `BelongsTo` chain — required an organization context, so `Rhino::query(Task::class)` outside a tenant route group always threw `MissingTenantContext`. An admin panel where every operator legitimately sees every organization's rows had no way to use the resolver at all, which pushed exactly the code that most needs scoping back onto raw model queries.
+**A tenant boundary is a property of a route group, not of the app.** `Rhino::query()` fails closed:
+an organization-scoped model queried with no organization throws `MissingTenantContext` rather than
+returning every tenant's rows. That is right for a tenant app and wrong for a back office, where
+operators are *meant* to see every organization — so 4.7.1 added an app-wide
+`config('rhino.multi_tenant.enabled')` switch to turn it off.
 
-A master flag now turns organization scoping off for the whole app:
+That switch could not express the shape that actually needs it: an app whose `/api` group **is**
+multi-tenant and whose admin group is not. Turning it off there disabled fail-closed for every group,
+including the tenant ones — the guard was removed exactly where it was still needed. It is replaced
+by a per-group key:
 
 ```php title="config/rhino.php"
-'multi_tenant' => [
-    'enabled' => false, // single-tenant: no organization filter, no fail-closed throw
-    'organization_identifier_column' => 'id',
+'route_groups' => [
+    'tenant' => [
+        'prefix' => '{organization}',
+        'middleware' => [\App\Http\Middleware\ResolveOrganizationFromRoute::class],
+        'models' => '*',
+    ],
+    'admin' => [
+        'prefix' => 'admin',
+        'tenant' => false, // no tenant boundary: queries here span every organization
+        'middleware' => [],
+        'models' => [],
+    ],
 ],
 ```
 
-With it `false`, `Rhino::query()` and `Rhino::scopedQuery()` skip the organization filter and stop throwing, so ambient calls work with no tenant route group — and no request at all:
+In a `'tenant' => false` group, `Rhino::query()` and `Rhino::scopedQuery()` apply no organization
+filter and no longer throw. The `tenant` group in the same app is untouched and keeps failing closed.
 
-```php
-use Rhino\Facades\Rhino;
+**Tag your own routes with their group.** The resolver reads the group from the matched route's
+`route_group` default — the same value memberships and policies already use. Rhino's generated CRUD
+routes carry it; a route you register yourself has to set it:
 
-// Admin panel controller, console command or job — no organization context needed.
-$open = Rhino::query(Task::class)->where('status', 'open')->count();
-$rows = Rhino::forUser($admin)->query(Task::class)->get();
+```php title="routes/api.php"
+Route::middleware(['auth:sanctum'])
+    ->get('admin/dashboard', [AdminDashboardController::class, 'summary'])
+    ->defaults('route_group', 'admin');
 ```
 
-This is **not** an unscoped escape hatch. With the flag off:
+Register non-tenant routes **above** any `{organization}`-prefixed route, or `/api/admin/dashboard`
+is matched as the tenant route with `{organization} = 'admin'`.
 
-- The app's user-aware global scopes (`App\Models\Scopes\{Model}Scope`) still run, so row-level access stays with your own roles and scopes.
-- `$allowedScopes` named scopes still apply through `Rhino::scopedQuery()`.
-- An explicit `Rhino::forUser($user)->inOrganization($org)` still scopes to that organization — the caller asked for that tenant.
-- CRUD through `GlobalController` is untouched: tenant route groups resolve and scope the organization exactly as before.
+**Nothing else is relaxed.** Declaring a group non-tenant removes only the organization filter, and
+only for that group. Your `App\Models\Scopes\{Model}Scope` global scopes, `$allowedScopes` named
+scopes, policies, and an explicit `inOrganization($org)` all behave exactly as before, as does CRUD
+through `GlobalController`. Anything not provably a non-tenant group still fails closed: an unknown
+group, a route with no group tag, and any code outside a request at all — a queued job or console
+command resolves no group, so it must still pass the tenant explicitly.
 
-**`rhino:install` no longer drops the flag.** `updateConfig()` replaced the whole `multi_tenant` block with just `organization_identifier_column`, so the `enabled` key published moments earlier vanished from the app's own config file. Behavior was unaffected — the resolver defaults the flag to `true` when the key is absent — but a single-tenant app had no key to flip without hand-editing. It now merges instead of replacing, so a config that predates the flag gains it on the next install.
+Also in this release: `php artisan rhino:install` merges the `multi_tenant` config block instead of
+replacing it, so keys your app added there survive re-running the installer.
 
-Fully backward compatible — the flag defaults to `true`, including for installs whose published config has no such key, so multi-tenant apps keep failing closed exactly as before.
+### How to update
 
-Laravel only; Rails and NestJS are unchanged at 4.7.0.
+```bash
+composer require rhino-project/rhino-laravel:^4.7.2
+```
 
-See [Multi-Tenancy — Single-Tenant Apps](./multi-tenancy#single-tenant-apps) and [Custom Controllers — Fail Closed](./custom-controllers#fail-closed).
+Nothing else is required for a multi-tenant app — fail-closed behavior is unchanged, and the
+`'tenant'` key defaults to `true` when absent.
+
+1. **If you set `multi_tenant.enabled => false` in 4.7.1**, remove it — the key no longer exists.
+   Declare the group serving your back-office routes `'tenant' => false` instead, and tag those
+   routes with `->defaults('route_group', '<group>')`. Without this step those calls resume throwing
+   `MissingTenantContext`.
+2. **If your custom controllers already use `Rhino::query()` inside tenant routes**, add
+   `->defaults('route_group', 'tenant')` to those routes for consistency. Not required — a route with
+   no group tag is treated as a tenant group and keeps failing closed.
+3. No migration, no re-publish. `config/rhino.php` is published into your app, so the new key's
+   documentation comment only appears if you re-publish it
+   (`php artisan vendor:publish --tag=rhino-config --force`); the feature works without that.
+
+See [Multi-Tenancy — Route Groups Without a Tenant Boundary](./multi-tenancy#route-groups-without-a-tenant-boundary),
+[Route Groups — Tenant Boundary](./route-groups#tenant-boundary), and
+[Custom Controllers — Fail Closed](./custom-controllers#fail-closed).
+
+:::info 4.7.1 is superseded
+4.7.1 shipped the app-wide `multi_tenant.enabled` switch described above, on Laravel only. It is
+replaced by the per-group key in 4.7.2 — upgrade rather than adopting it.
+:::
 
 ## 4.7.0
 
@@ -97,6 +143,12 @@ See [Computed Attributes](./computed-attributes) for the full reference, and [Be
 
 Fully backward compatible — existing `rhinoComputedAttributes()` behaves exactly as before, read responses are unchanged unless a client sends `?computed_attributes=`, and the `/computed` route is registered only for models that declare collection attributes.
 
+### How to update
+
+```bash
+composer require rhino-project/rhino-laravel:^4.7.2
+```
+
 :::warning Laravel upgrade step — re-publish `routes/api.php`
 Rhino's route file is **published into your app** (`routes/api.php`), so route registration lives in code you own. An app upgrading from an earlier version will not serve `/computed` until that file is refreshed:
 
@@ -136,6 +188,17 @@ Resolution order is per-model `$routeKey` → global `route_key` config → prim
 - [Blueprint](./blueprint) supports a per-model `options: { route_key: ... }` that emits the `$routeKey` static in the generated model and uses route-key URLs in generated tests.
 
 Fully backward compatible — defaults are unchanged; nothing changes unless a route key is configured.
+
+### How to update
+
+```bash
+composer require rhino-project/rhino-laravel:^4.7.2
+```
+
+Then set `$routeKey` on the models that need it, or the global `'route_key'` in `config/rhino.php`.
+Clients must switch to the new identifier in URLs at the same time — the `{id}` segment stops matching
+the primary key for those models. No migration is required beyond a **unique index** on the chosen
+column.
 
 ## 4.5.0 and earlier
 

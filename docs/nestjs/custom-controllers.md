@@ -141,6 +141,36 @@ A missing organization in a background job is a bug, not an empty result. The re
 
 Global (non-tenant) models are unaffected — a model with no `belongsToOrganization` and no org relationship has nothing to scope, so the resolver returns its query without requiring an organization.
 
+### Route groups without a tenant boundary
+
+The throw assumes there *is* a tenant boundary to protect. Some [route groups](./route-groups.md) have none — a back office whose operators see every organization's rows, with access decided by roles and scopes instead. Declaring the group `tenant: false` removes the organization filter and the throw together, for that group only:
+
+```ts title="src/rhino.config.ts"
+routeGroups: {
+  tenant: { prefix: ':organization', middleware: [ResolveOrganizationMiddleware], models: '*' },
+  admin:  { prefix: 'admin', tenant: false, models: [] },
+},
+```
+
+```ts title="src/admin/admin-dashboard.controller.ts"
+@Get('dashboard')
+async summary(@Req() req: any) {
+  // RouteGroupMiddleware already resolved the group onto the request.
+  const ctx = { user: req.user, routeGroup: req.__routeGroup };
+
+  return {
+    projects_total: await this.scope.count('projects', ctx), // every organization
+    tasks_total: await this.scope.count('tasks', ctx),
+  };
+}
+```
+
+It removes **only** the organization filter, and only for that group. The models' `scopes` still run, whitelisted named scopes still apply, policies still gate access, and an explicit `ctx.organization` still scopes to that organization.
+
+The predicate is deliberately strict: only a group that declares `tenant: false` opts out. An unknown group, a context with no `routeGroup` (a queued job, a script), and even the conventional `public` group all keep failing closed — an unauthenticated route must never silently read every tenant's rows.
+
+See [Multi-Tenancy — Route Groups Without a Tenant Boundary](./multi-tenancy.md#route-groups-without-a-tenant-boundary).
+
 ## Worked Example: A Tenant-Safe Dashboard
 
 A dashboard that aggregates across two resources — `project` and `task` — scoped to the current tenant. Every read goes through the resolver, so nothing can leak across organizations:

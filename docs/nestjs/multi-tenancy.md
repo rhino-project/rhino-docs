@@ -41,6 +41,56 @@ multiTenant: {
 | `organizationModel` | `string` | `'organization'` | The Prisma model name for organizations. |
 | `userOrganizationModel` | `string` | `'userRole'` | The Prisma model name for the user-organization membership join. |
 
+## Route Groups Without a Tenant Boundary
+
+Every [route group](./route-groups.md) is a tenant group by default, which is what a tenant app wants: the [resource-scope resolver](./custom-controllers.md) **fails closed**, so `ResourceScopeService` on an org-scoped model with no `ctx.organization` throws `403 TENANT_CONTEXT_REQUIRED` rather than returning every tenant's rows.
+
+Some groups genuinely have no tenant to resolve — a back office or admin group whose operators are meant to see every organization's records, with access decided by **roles and scopes** instead of by organization. Declare the group non-tenant:
+
+```ts title="src/rhino.config.ts"
+routeGroups: {
+  tenant: {
+    prefix: ':organization',
+    middleware: [ResolveOrganizationMiddleware],
+    models: '*',
+  },
+  admin: {
+    prefix: 'admin',
+    tenant: false, // no tenant boundary: queries here span every organization
+    models: [],
+  },
+},
+```
+
+Inside that group the resolver applies **no** organization filter and no longer throws. The `tenant` group in the same app is untouched and keeps failing closed — that is the point of putting the switch on the group rather than on the app.
+
+The group reaches the resolver through `ctx.routeGroup`. `RouteGroupMiddleware` sets `req.__routeGroup` on every request, so a custom controller passes it straight through:
+
+```ts
+const ctx = { user: req.user, routeGroup: req.__routeGroup };
+const total = await this.scope.count('tasks', ctx);
+```
+
+Declaring the group also makes its prefix a reserved segment for `createTenantRouteRewrite`, so `/api/admin/*` is never mistaken for an organization slug.
+
+### What declaring a group non-tenant does not change
+
+It removes **only** the organization filter, and only for contexts carrying that group:
+
+| Still applies in a `tenant: false` group | Why |
+|---|---|
+| The model's `scopes` | Your user-aware scopes are where row-level access lives when there is no organization |
+| `namedScopes` | `scopedWhere(slug, ctx, { namedScope })` behaves identically |
+| Policies | The resolver scopes rows; the policy guard still decides access |
+| Explicit `ctx.organization` | An explicitly passed organization is always honored — the caller asked for that tenant |
+| CRUD through `GlobalController` | Tenant groups resolve and scope the organization exactly as before |
+
+The predicate is stricter than the membership one (`isTenantGroup`): only an explicit `tenant: false` opts out, so an unknown group, a context with no `routeGroup`, and the conventional `public` group all keep failing closed.
+
+:::warning Only for groups with no tenant boundary
+`tenant: false` removes the guard that turns a forgotten tenant context into a loud 403 — for that group, a missing organization becomes a **silent cross-tenant read** instead. Declare it only on groups where every operator is meant to see every organization's rows, and keep those groups' model lists narrow (`models: []` when the group only serves custom controllers).
+:::
+
 ## Routing Strategies
 
 ### URL Prefix Mode

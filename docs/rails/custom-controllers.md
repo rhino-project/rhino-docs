@@ -118,10 +118,58 @@ The resolver **never** returns an unscoped query for a tenant-owned model. If yo
 ```ruby
 # No request, no explicit org → raises, does NOT dump all tenants
 Rhino.query(Task)
-# => Rhino::MissingTenantContext: Task
+# => Rhino::MissingTenantContext: "Rhino.query(Task) requires an organization
+#    context but none is set. Use Rhino.for_user(...).in_organization(...)
+#    outside a tenant request, or declare the route group serving this request
+#    non-tenant with `tenant: false` if it legitimately spans every organization."
 ```
 
 This is the **opposite** of a raw model query. `Task.all` outside a request fails *open* — it returns every organization's rows because the `RequestStore` org context is empty. `Rhino.query(Task)` fails *closed* — no context means an exception, never a leak. That guarantee is exactly why you route custom-controller queries through the resolver instead of the model.
+
+### Route groups without a tenant boundary
+
+The raise assumes there *is* a tenant boundary to protect. Some [route groups](./route-groups.md)
+have none — a back office whose operators see every organization's rows, with access decided by roles
+and scopes instead. No organization is ever resolved there, so every ambient call on an org-scopable
+model would raise and the resolver would be unusable in exactly the controllers that most need it.
+
+Declaring the group non-tenant removes the organization filter and the raise together, for that
+group only:
+
+```ruby title="config/initializers/rhino.rb"
+config.route_group :tenant, prefix: ":organization",
+  middleware: [Rhino::Middleware::ResolveOrganizationFromRoute], models: :all
+config.route_group :admin, prefix: "admin", tenant: false, models: []
+```
+
+```ruby title="app/controllers/admin_dashboard_controller.rb"
+class AdminDashboardController < ApplicationController
+  include Rhino::RouteGroupContext
+  rhino_route_group :admin
+
+  def summary
+    render json: {
+      projects_total: Rhino.query(Project).count,  # every organization
+      tasks_total:    Rhino.query(Task).count
+    }
+  end
+end
+```
+
+`Rhino::RouteGroupContext` publishes the group for the rest of the request, which is also what the
+policies and the permission resolver read. Without an explicit `rhino_route_group`, it falls back to
+the route's own `defaults: { route_group: "admin" }`.
+
+It removes **only** the organization filter, and only for that group. The models' own scopes still
+run, whitelisted named scopes still apply through `scoped_query`, policies still gate access, and an
+explicit `in_organization(org)` still scopes to that organization.
+
+Everything else keeps failing closed: the tenant groups in the same app, a group you did not declare
+non-tenant, a request with no group, and any code with no request at all. An Active Job or rake task
+resolves no route group, so it must still pass the tenant explicitly with
+`Rhino.for_user(user).in_organization(org)`.
+
+See [Multi-Tenancy — Route Groups Without a Tenant Boundary](./multi-tenancy.md#route-groups-without-a-tenant-boundary).
 
 :::note
 The fail-closed check only applies to organization-scopable models (those including `Rhino::BelongsToOrganization`, directly or through a relationship). A model that isn't tenant-owned has nothing to scope, so `Rhino.query` returns its relation unchanged.

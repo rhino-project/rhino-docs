@@ -23,6 +23,7 @@ end
 | `domain:`     | String / nil    | `nil`   | Optional host constraint (see [Domain Constraints](#domain-constraints))             |
 | `middleware:` | Array           | `[]`    | Middleware stack applied on top of authentication                                    |
 | `models:`     | `:all` / Array  | —       | `:all` for all registered models, or an array of model slugs                         |
+| `tenant:`     | Boolean         | `true`  | `false` declares the group has no tenant boundary (see [Tenant Boundary](#tenant-boundary)) |
 | `auth:`       | Boolean         | `false` | Register a group-tagged auth route set (see [Group membership & auth](#group-membership--auth)) |
 | `hooks:`      | Class           | `nil`   | A class responding to the lifecycle event methods, run after each auth action        |
 
@@ -337,6 +338,55 @@ Organization scoping is **implicit**, not configured per group. The ResourcesCon
 - **Other groups** → no middleware sets organization → scoping skipped, queries return all records
 
 This means you don't need any extra configuration for non-tenant groups to bypass org scoping — it happens naturally.
+
+## Tenant Boundary
+
+CRUD scoping is implicit, as above — but the [resource-scope resolver](./custom-controllers.md) used
+by your **own** controllers cannot guess. `Rhino.query` fails closed: an organization-scopable model
+queried with no organization raises `Rhino::MissingTenantContext` rather than returning every
+tenant's rows. In a group that has no organization to resolve, that raise is wrong — so say so:
+
+```ruby title="config/initializers/rhino.rb"
+config.route_group :admin,
+  prefix: "admin",
+  tenant: false,   # queries here legitimately span every organization
+  models: []
+```
+
+In a `tenant: false` group, `Rhino.query` and `Rhino.scoped_query` apply no organization filter and
+do not raise. Every other group is unchanged and still fails closed, including the tenant groups in
+the same app.
+
+The group comes from the request's `route_group`, the same value memberships and policies use.
+Rhino's own controllers publish it; a custom controller declares it:
+
+```ruby title="app/controllers/admin_dashboard_controller.rb"
+class AdminDashboardController < ApplicationController
+  include Rhino::RouteGroupContext
+  rhino_route_group :admin
+
+  def summary
+    render json: { tasks: Rhino.query(Task).count } # every organization
+  end
+end
+```
+
+The concern falls back to the route's own default, so tagging the route works too — useful when one
+controller is mounted under more than one group:
+
+```ruby title="config/routes.rb"
+get "/api/admin/dashboard", to: "admin_dashboard#summary",
+                            defaults: { route_group: "admin" }
+```
+
+Declare those routes **before** any `:organization`-prefixed route, or `/api/admin/dashboard` is
+matched as the tenant route with `:organization = "admin"`.
+
+Outside a request — an Active Job, a rake task, the console — no group resolves, so the resolver
+keeps failing closed there regardless of this keyword. Pass the tenant explicitly with
+`Rhino.for_user(user).in_organization(org)`.
+
+See [Multi-Tenancy — Route Groups Without a Tenant Boundary](./multi-tenancy.md#route-groups-without-a-tenant-boundary).
 
 ## Custom Scoping for Non-Tenant Groups
 

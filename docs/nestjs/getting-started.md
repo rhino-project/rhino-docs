@@ -437,9 +437,11 @@ constructor(private readonly scope: ResourceScopeService) {}
 const openTasks = await this.scope.count('task', ctx, { status: 'open' });
 ```
 
-The context (`{ user, organization }`) is always **explicit** in NestJS — build it from the request in a
-controller, or by hand in a job. A raw `prisma.task.count()` has no org filter and leaks across tenants.
-See [Custom Controllers](./custom-controllers).
+The context (`{ user, organization, routeGroup }`) is always **explicit** in NestJS — build it from the
+request in a controller, or by hand in a job. A raw `prisma.task.count()` has no org filter and leaks
+across tenants. Omitting the organization throws `403 TENANT_CONTEXT_REQUIRED` rather than leaking —
+unless `ctx.routeGroup` names a route group declared `tenant: false`, where queries span every
+organization on purpose. See [Custom Controllers](./custom-controllers).
 
 ### 11. Code generation & tooling
 

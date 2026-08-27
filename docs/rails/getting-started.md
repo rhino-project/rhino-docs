@@ -343,8 +343,9 @@ The organization is resolved from a URL prefix (`/api/{organization}/…`) or a 
 
 One set of models, several URL contexts — a tenant dashboard, a driver app, an admin panel, a public
 read-only API — each with its own `prefix:`, optional `domain:`, `middleware:`, model subset, `auth:`
-route set and lifecycle `hooks:`. `:tenant` and `:public` are reserved names. Conflicting groups raise
-at boot. See [Route Groups](./route-groups).
+route set, lifecycle `hooks:` and tenant boundary (`tenant: false` for a group that spans every
+organization). `:tenant` and `:public` are reserved names. Conflicting groups raise at boot. See
+[Route Groups](./route-groups).
 
 ### 9. Data lifecycle
 
@@ -382,7 +383,9 @@ open_tasks = Rhino.query(Task).where(status: 'open').count
 
 `Rhino.query` returns an org-scoped `ActiveRecord::Relation` and raises `Rhino::MissingTenantContext`
 rather than returning every tenant's rows when there is no tenant. Use `Rhino.for_user(user).in_organization(org).run { ... }`
-to establish that context outside a request. See [Custom Controllers](./custom-controllers).
+to establish that context outside a request — or, in a route group declared `tenant: false`, query
+without one and get every organization's rows on purpose. See
+[Custom Controllers](./custom-controllers).
 
 ### 12. Code generation & tooling
 

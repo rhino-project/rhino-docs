@@ -130,8 +130,9 @@ Rhino::query(Task::class);
 // → throws Rhino\Exceptions\MissingTenantContext:
 //   "Rhino::query(App\Models\Task) requires an organization context but none is
 //    set. Use Rhino::forUser(...)->inOrganization(...) outside a tenant request,
-//    or set config('rhino.multi_tenant.enabled') to false if this app is
-//    single-tenant."
+//    or declare the route group serving this request non-tenant with
+//    'tenant' => false in config('rhino.route_groups') if it legitimately spans
+//    every organization."
 ```
 
 This is the **opposite** of a raw model query, which fails **open** outside a request (returns everyone's rows). With the resolver, forgetting the tenant context is a loud crash you catch in development, not a silent cross-tenant leak in production.
@@ -140,27 +141,56 @@ This is the **opposite** of a raw model query, which fails **open** outside a re
 This is the entire point of the resolver. A raw `Task::all()` in a job leaks every tenant. `Rhino::query(Task::class)` in the same job throws. Always reach for the resolver.
 :::
 
-### Single-tenant apps
+### Route groups without a tenant boundary
 
-The throw assumes there *is* a tenant boundary to protect. An app with no tenant route group — an internal admin panel where every operator sees every organization's rows, and access is decided by roles and scopes instead — has no organization to resolve, so every ambient call on an org-owned model would throw and the resolver would be unusable.
+The throw assumes there *is* a tenant boundary to protect. Some route groups have none — a back
+office or admin group where every operator sees every organization's rows, and access is decided by
+roles and scopes instead. No organization is ever resolved there, so every ambient call on an
+org-owned model would throw and the resolver would be unusable in exactly the controllers that most
+need it.
 
-Setting the app-wide switch to `false` removes the organization filter and the throw together:
+Declaring the group non-tenant removes the organization filter and the throw together, for that
+group only:
 
 ```php title="config/rhino.php"
-'multi_tenant' => [
-    'enabled' => false,
+'route_groups' => [
+    'tenant' => [/* ... */],           // unchanged: still fails closed
+    'admin' => [
+        'prefix' => 'admin',
+        'tenant' => false,
+        'middleware' => [],
+        'models' => [],
+    ],
 ],
 ```
 
+```php title="routes/api.php"
+// The route says which group it belongs to. Rhino's generated CRUD routes carry
+// this default already; a route you register yourself has to set it.
+Route::middleware(['auth:sanctum'])
+    ->get('admin/dashboard', [AdminDashboardController::class, 'summary'])
+    ->defaults('route_group', 'admin');
+```
+
 ```php
-// Now valid with no tenant context at all — controller, command or job:
+// Reached through that route, with no organization anywhere:
 $open = Rhino::query(Task::class)->where('status', 'open')->count();
 $rows = Rhino::forUser($admin)->query(Task::class)->get();
 ```
 
-It removes **only** the organization filter. Your `App\Models\Scopes\{Model}Scope` global scopes still run, `$allowedScopes` named scopes still apply through `scopedQuery()`, policies still gate access, and an explicit `inOrganization($org)` still scopes to that organization. So the resolver remains the right entry point in a single-tenant app — it is still the thing applying your user-aware scopes, which a raw model query would skip.
+It removes **only** the organization filter, and only for that group. Your
+`App\Models\Scopes\{Model}Scope` global scopes still run, `$allowedScopes` named scopes still apply
+through `scopedQuery()`, policies still gate access, and an explicit `inOrganization($org)` still
+scopes to that organization. So the resolver remains the right entry point in a back office — it is
+still the thing applying your user-aware scopes, which a raw model query would skip.
 
-The flag defaults to `true`, so leaving it alone (or omitting the key) keeps the fail-closed behavior above. See [Multi-Tenancy — Single-Tenant Apps](./multi-tenancy.md#single-tenant-apps) for the full picture and the caveat.
+Everything else keeps failing closed: the tenant groups in the same app, a group you did not declare
+non-tenant, a route with no `route_group` default, and any code with no request at all. A queued job
+or console command resolves no route group, so it must still pass the tenant explicitly with
+`Rhino::forUser($user)->inOrganization($org)`.
+
+See [Multi-Tenancy — Route Groups Without a Tenant Boundary](./multi-tenancy.md#route-groups-without-a-tenant-boundary)
+for the full picture and the caveat.
 
 ## Worked Example: A Tenant-Safe Dashboard
 
@@ -267,7 +297,7 @@ Now `GET /api/acme-corp/dashboard` returns aggregates for Acme Corp only — the
 
 ## Related
 
-- [Multi-Tenancy](./multi-tenancy.md) — how organization scoping works, direct and nested (relationship-based) ownership, and the `multi_tenant.enabled` switch for single-tenant apps.
+- [Multi-Tenancy](./multi-tenancy.md) — how organization scoping works, direct and nested (relationship-based) ownership, and the per-group `'tenant' => false` switch for groups with no tenant boundary.
 - [Policies & Permissions](./policies.md) — the `viewAny`/`Gate::authorize` checks that authorize access per resource.
 - [Querying](./querying.md) — filters, sorts, includes, and the `$allowedScopes` named scopes `scopedQuery()` builds on.
 - [Computed Attributes](./computed-attributes.md) — per-resource aggregates without a controller.

@@ -38,57 +38,91 @@ Or configure it manually in `config/rhino.php`:
 For platforms that need multiple access patterns (e.g., tenant + driver + admin + public), see [Route Groups](./route-groups.md).
 :::
 
-## Single-Tenant Apps
+## Route Groups Without a Tenant Boundary
 
-`multi_tenant.enabled` is the master switch for organization scoping. It defaults to `true`, which is
-what every tenant app wants: the [resource-scope resolver](./custom-controllers.md) **fails closed**,
-so `Rhino::query()` on an organization-scoped model with no organization context throws
-`MissingTenantContext` rather than returning every tenant's rows.
+Every [route group](./route-groups.md) is a tenant group by default, which is what a tenant app
+wants: the [resource-scope resolver](./custom-controllers.md) **fails closed**, so `Rhino::query()`
+on an organization-scoped model with no organization context throws `MissingTenantContext` rather
+than returning every tenant's rows.
 
-Some apps genuinely have no tenant to resolve — an internal admin panel or back office where every
-operator is meant to see every organization's records, and access is decided by **roles and scopes**
-instead of by organization. Those apps have no tenant route group, so ambient `Rhino::query()` has
-nothing to resolve and would throw on any organization-owned model. Turn the switch off:
+Some groups genuinely have no tenant to resolve — a back office or admin group whose operators are
+meant to see every organization's records, with access decided by **roles and scopes** instead of by
+organization. No organization is ever resolved there, so an ambient `Rhino::query()` would throw on
+any organization-owned model. Declare the group non-tenant:
 
 ```php title="config/rhino.php"
-'multi_tenant' => [
-    'enabled' => false,
-    'organization_identifier_column' => 'id',
+'route_groups' => [
+    'tenant' => [
+        'prefix' => '{organization}',
+        'middleware' => [\App\Http\Middleware\ResolveOrganizationFromRoute::class],
+        'models' => '*',
+    ],
+    'admin' => [
+        'prefix' => 'admin',
+        'tenant' => false, // no tenant boundary: queries here span every organization
+        'middleware' => [],
+        'models' => [],
+    ],
 ],
 ```
 
-With it `false`, `Rhino::query()` and `Rhino::scopedQuery()` apply **no** organization filter and no
-longer throw, so the resolver works with no tenant context — in a controller, a console command or a
-queued job:
+Inside that group, `Rhino::query()` and `Rhino::scopedQuery()` apply **no** organization filter and
+no longer throw:
 
 ```php
 use Rhino\Facades\Rhino;
 
+// A controller reached through the 'admin' group.
 $open = Rhino::query(Task::class)->where('status', 'open')->count();
 $rows = Rhino::forUser($admin)->query(Task::class)->get();
 ```
 
-Turning the switch off removes **only** the organization filter. Everything else that narrows a query
-still applies:
+The `tenant` group in the same app is untouched and keeps failing closed. That is the point of
+putting the switch on the group rather than on the app: a mixed app — a multitenant API plus a
+back office — gets exactly one relaxed group.
 
-| Still applies with `enabled => false` | Why |
+### Tagging your own routes with a group
+
+The resolver reads the group from the matched route's `route_group` default, the same value
+[memberships](./route-groups.md) and policies resolve it from. Rhino's generated CRUD routes carry it
+already. A route you register yourself has to say which group it belongs to:
+
+```php title="routes/api.php"
+Route::middleware(['auth:sanctum'])
+    ->get('admin/dashboard', [AdminDashboardController::class, 'summary'])
+    ->defaults('route_group', 'admin');
+```
+
+Register non-tenant routes **above** any `{organization}`-prefixed route, or `/api/admin/dashboard`
+matches the tenant route with `{organization} = 'admin'` and 404s as an unknown organization.
+
+### What declaring a group non-tenant does not change
+
+It removes **only** the organization filter, and only for requests served by that group:
+
+| Still applies in a `'tenant' => false` group | Why |
 |---|---|
-| `App\Models\Scopes\{Model}Scope` | Your user-aware global scopes are where row-level access lives in a single-tenant app |
+| `App\Models\Scopes\{Model}Scope` | Your user-aware global scopes are where row-level access lives when there is no organization |
 | `$allowedScopes` named scopes | `Rhino::scopedQuery($model, 'availableForDrivers')` behaves identically |
 | Policies | The resolver scopes rows; `Gate::authorize()` still decides access |
 | Explicit `inOrganization($org)` | An explicitly requested organization is always honored — the caller asked for that tenant |
+| CRUD through `GlobalController` | Tenant groups resolve and scope the organization exactly as before |
 
-:::warning Only for apps with no tenant boundary
-This is an app-wide switch, not a per-query one. Turning it off in a multi-tenant app removes the
-guard that turns a forgotten tenant context into a loud crash — a missing organization becomes a
-**silent cross-tenant read** instead. Leave it `true` unless every operator in the app is meant to
-see every organization's rows.
+Everything that is **not** provably a non-tenant group keeps failing closed — an unknown group, a
+route with no group tag, and any code running outside a request at all:
+
+```php
+// A queued job or console command resolves no route group, so this still throws
+// MissingTenantContext. Pass the tenant explicitly instead.
+Rhino::forUser($admin)->inOrganization($org)->query(Task::class);
+```
+
+:::warning Only for groups with no tenant boundary
+`'tenant' => false` removes the guard that turns a forgotten tenant context into a loud crash — for
+that group, a missing organization becomes a **silent cross-tenant read** instead. Declare it only on
+groups where every operator is meant to see every organization's rows, and keep those groups' models
+list narrow (`'models' => []` when the group only serves custom controllers).
 :::
-
-Because the flag defaults to `true` when the key is absent, an app whose published config predates it
-keeps failing closed. `php artisan rhino:install` merges the key into an existing `multi_tenant`
-block, so re-running the installer adds it without discarding your
-`organization_identifier_column`.
 
 ## How It Works
 
