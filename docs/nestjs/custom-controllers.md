@@ -167,7 +167,16 @@ async summary(@Req() req: any) {
 
 It removes **only** the organization filter, and only for that group. The models' `scopes` still run, whitelisted named scopes still apply, policies still gate access, and an explicit `ctx.organization` still scopes to that organization.
 
-The predicate is deliberately strict: only a group that declares `tenant: false` opts out. An unknown group, a context with no `routeGroup` (a queued job, a script), and even the conventional `public` group all keep failing closed — an unauthenticated route must never silently read every tenant's rows.
+The predicate is deliberately strict: only a group that declares `tenant: false` opts out. An unknown group, a context with no `routeGroup`, and even the conventional `public` group all keep failing closed — an unauthenticated route must never silently read every tenant's rows.
+
+A queued job or script has no request to read `req.__routeGroup` from, so it names the group in the context it builds — the same field, set by hand:
+
+```ts
+// No request anywhere: this is the whole context.
+await scope.count('tasks', { user: operator, routeGroup: 'admin' });
+```
+
+Naming a tenant group there changes nothing; it still throws.
 
 See [Multi-Tenancy — Route Groups Without a Tenant Boundary](./multi-tenancy.md#route-groups-without-a-tenant-boundary).
 

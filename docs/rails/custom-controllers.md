@@ -165,9 +165,20 @@ run, whitelisted named scopes still apply through `scoped_query`, policies still
 explicit `in_organization(org)` still scopes to that organization.
 
 Everything else keeps failing closed: the tenant groups in the same app, a group you did not declare
-non-tenant, a request with no group, and any code with no request at all. An Active Job or rake task
-resolves no route group, so it must still pass the tenant explicitly with
-`Rhino.for_user(user).in_organization(org)`.
+non-tenant, and a request with no group.
+
+Code with **no request at all** — an Active Job, a rake task, the console — publishes no group either,
+so it says which one it is acting as:
+
+```ruby
+# The :admin group is declared `tenant: false`, so this spans every organization.
+Rhino.in_route_group(:admin).query(Task).count
+Rhino.for_user(operator).in_route_group(:admin).query(Task)
+```
+
+That is a statement of context, not a bypass: the named group's own `tenant:` still decides, so
+`Rhino.in_route_group(:tenant)` and an unconfigured group both still raise. A job that belongs to one
+tenant keeps using `Rhino.for_user(user).in_organization(org)`.
 
 See [Multi-Tenancy — Route Groups Without a Tenant Boundary](./multi-tenancy.md#route-groups-without-a-tenant-boundary).
 

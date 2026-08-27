@@ -109,13 +109,46 @@ It removes **only** the organization filter, and only for requests served by tha
 | CRUD through `GlobalController` | Tenant groups resolve and scope the organization exactly as before |
 
 Everything that is **not** provably a non-tenant group keeps failing closed — an unknown group, a
-route with no group tag, and any code running outside a request at all:
+route with no group tag, and any code running outside a request that does not say which group it is
+acting as.
+
+### Naming the group where no route resolves one
+
+A queued job, a console command or a scheduled task has no route, so nothing resolves a group and a
+bare `Rhino::query()` fails closed. Such code names the group it is acting as:
 
 ```php
-// A queued job or console command resolves no route group, so this still throws
-// MissingTenantContext. Pass the tenant explicitly instead.
+use Rhino\Facades\Rhino;
+
+// A back-office job: the 'admin' group is declared 'tenant' => false, so this
+// legitimately spans every organization.
+Rhino::inRouteGroup('admin')->query(Task::class)->where('status', 'open')->count();
+
+// With an operator, so the user-aware global scopes still narrow the rows:
+Rhino::forUser($operator)->inRouteGroup('admin')->query(Task::class)->get();
+
+// Ambient calls inside the block see the group too:
+Rhino::inRouteGroup('admin')->run(fn () => Rhino::query(Task::class)->count());
+```
+
+The config remains the single source of truth: the **named group's own** `'tenant' => false` is what
+lifts the boundary. Naming a tenant group — or one that is not configured — changes nothing and still
+throws, so this states a context rather than bypassing one:
+
+```php
+Rhino::inRouteGroup('tenant')->query(Task::class);  // still throws MissingTenantContext
+Rhino::forUser($admin)->query(Task::class);         // no group named → still throws
+```
+
+For a job that belongs to **one** tenant, pass that tenant instead — an explicit organization always
+scopes, in any group:
+
+```php
 Rhino::forUser($admin)->inOrganization($org)->query(Task::class);
 ```
+
+The context is popped after the query is built, so it never leaks into a later ambient query in a
+long-lived worker.
 
 :::warning Only for groups with no tenant boundary
 `'tenant' => false` removes the guard that turns a forgotten tenant context into a loud crash — for

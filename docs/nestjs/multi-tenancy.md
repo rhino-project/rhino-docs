@@ -87,6 +87,18 @@ It removes **only** the organization filter, and only for contexts carrying that
 
 The predicate is stricter than the membership one (`isTenantGroup`): only an explicit `tenant: false` opts out, so an unknown group, a context with no `routeGroup`, and the conventional `public` group all keep failing closed.
 
+### Naming the group where there is no request
+
+A queued job or a script has no request, so nothing sets `req.__routeGroup`. Because the context is always explicit in NestJS, such code simply names the group itself — no separate API is needed:
+
+```ts
+// A back-office job: the 'admin' group is declared tenant: false, so this
+// legitimately spans every organization.
+await scope.count('tasks', { user: operator, routeGroup: 'admin' });
+```
+
+The config remains the single source of truth: the named group's own `tenant: false` is what lifts the boundary. `{ routeGroup: 'tenant' }` and an unconfigured group both still throw, as does a context with no `routeGroup` at all. For a job that belongs to one tenant, pass `organization` instead — an explicit organization always scopes, in any group.
+
 :::warning Only for groups with no tenant boundary
 `tenant: false` removes the guard that turns a forgotten tenant context into a loud 403 — for that group, a missing organization becomes a **silent cross-tenant read** instead. Declare it only on groups where every operator is meant to see every organization's rows, and keep those groups' model lists narrow (`models: []` when the group only serves custom controllers).
 :::

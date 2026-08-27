@@ -7,6 +7,56 @@ title: Release Notes
 
 Notable changes in each release of Rhino for Laravel, newest first.
 
+## 4.7.3
+
+**Jobs and commands can name their route group.** 4.7.2 made the tenant boundary a property of the
+route group, which left code with **no request** unable to reach a non-tenant group at all: a queued
+job, an Artisan command or a scheduled task resolves no group, so `Rhino::query()` always failed
+closed there. The only way out was passing an explicit organization — which a back-office job that
+legitimately spans every tenant does not have.
+
+Such code now says which group it is acting as:
+
+```php
+use Rhino\Facades\Rhino;
+
+// The 'admin' group is declared 'tenant' => false, so this spans every organization.
+Rhino::inRouteGroup('admin')->query(Task::class)->where('status', 'open')->count();
+
+// With an operator, so the user-aware global scopes still narrow the rows:
+Rhino::forUser($operator)->inRouteGroup('admin')->query(Task::class)->get();
+
+// Ambient calls inside the block see the group too:
+Rhino::inRouteGroup('admin')->run(fn () => Rhino::query(Task::class)->count());
+```
+
+**It states a context; it is not a bypass.** The named group's own `'tenant' => false` in
+`config/rhino.php` is what lifts the boundary, so naming a tenant group or one that is not configured
+still throws `MissingTenantContext`, and so does a `forUser()` that names no group. An explicit
+`inOrganization($org)` still scopes in any group, and the override is popped once the query is built,
+so nothing leaks into a later ambient query in a long-lived worker.
+
+`PendingScopedContext` also gains `forUser()`, so the builder reads the same in either order, and an
+explicit context can only **add** a group, never erase the one a request is already served by —
+`Rhino::forUser($u)->query(...)` inside a non-tenant request keeps that request's group.
+
+### How to update
+
+```bash
+composer require rhino-project/rhino-laravel:^4.7.3
+```
+
+Nothing to change. `inRouteGroup()` is additive, and every existing call behaves exactly as it did in
+4.7.2.
+
+1. **In a back-office job or command**, replace a query that could not be written before with
+   `Rhino::inRouteGroup('<group>')->query(...)`. The group must already be declared
+   `'tenant' => false` — see [Route Groups — Tenant Boundary](./route-groups#tenant-boundary).
+2. **Jobs scoped to one tenant** keep using `Rhino::forUser($user)->inOrganization($org)`; that is
+   still the right call and is unchanged.
+
+See [Multi-Tenancy — Naming the group where no route resolves one](./multi-tenancy#naming-the-group-where-no-route-resolves-one).
+
 ## 4.7.2
 
 **A tenant boundary is a property of a route group, not of the app.** `Rhino::query()` fails closed:
@@ -65,7 +115,7 @@ replacing it, so keys your app added there survive re-running the installer.
 ### How to update
 
 ```bash
-composer require rhino-project/rhino-laravel:^4.7.2
+composer require rhino-project/rhino-laravel:^4.7.3
 ```
 
 Nothing else is required for a multi-tenant app — fail-closed behavior is unchanged, and the
@@ -146,7 +196,7 @@ Fully backward compatible — existing `rhinoComputedAttributes()` behaves exact
 ### How to update
 
 ```bash
-composer require rhino-project/rhino-laravel:^4.7.2
+composer require rhino-project/rhino-laravel:^4.7.3
 ```
 
 :::warning Laravel upgrade step — re-publish `routes/api.php`
@@ -192,7 +242,7 @@ Fully backward compatible — defaults are unchanged; nothing changes unless a r
 ### How to update
 
 ```bash
-composer require rhino-project/rhino-laravel:^4.7.2
+composer require rhino-project/rhino-laravel:^4.7.3
 ```
 
 Then set `$routeKey` on the models that need it, or the global `'route_key'` in `config/rhino.php`.

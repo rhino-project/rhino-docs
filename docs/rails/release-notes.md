@@ -7,6 +7,59 @@ title: Release Notes
 
 Notable changes in each release of Rhino for Rails, newest first.
 
+## 4.7.3
+
+**Jobs and rake tasks can name their route group.** 4.7.2 made the tenant boundary a property of the
+route group, which left code with **no request** unable to reach a non-tenant group at all: an Active
+Job, a rake task or the console publishes no group, so `Rhino.query` always failed closed there. The
+only way out was passing an explicit organization — which a back-office job that legitimately spans
+every tenant does not have.
+
+Such code now says which group it is acting as:
+
+```ruby
+# The :admin group is declared `tenant: false`, so this spans every organization.
+Rhino.in_route_group(:admin).query(Task).where(status: "open").count
+
+# With an operator, so the model's user-aware scopes still narrow the rows:
+Rhino.for_user(operator).in_route_group(:admin).query(Task)
+
+# Ambient calls inside the block see the group too:
+Rhino.in_route_group(:admin).run { Rhino.query(Task).count }
+```
+
+**It states a context; it is not a bypass.** The named group's own `tenant: false` in the initializer
+is what lifts the boundary, so naming a tenant group or one that is not configured still raises
+`Rhino::MissingTenantContext`, and so does a `for_user` that names no group. An explicit
+`in_organization(org)` still scopes in any group, and the context is restored once the relation is
+built (and after `run`), so nothing leaks into a later ambient query in a long-lived worker.
+
+`Rhino::Context.with` takes an optional `route_group:` and never installs a nil one, so an explicit
+context can only **add** a group, never erase the one a request is already served by —
+`Rhino.for_user(u).query(M)` inside a non-tenant request keeps that request's group.
+`PendingScopedContext` also gains `#for_user`, so the builder reads the same in either order.
+
+### How to update
+
+```ruby title="Gemfile"
+gem "rhino-rails", "~> 4.7.3"
+```
+
+```bash
+bundle update rhino-rails
+```
+
+Nothing to change. `in_route_group` is additive, and every existing call behaves exactly as it did in
+4.7.2.
+
+1. **In a back-office job or rake task**, replace a query that could not be written before with
+   `Rhino.in_route_group(:<group>).query(...)`. The group must already be declared `tenant: false` —
+   see [Route Groups — Tenant Boundary](./route-groups#tenant-boundary).
+2. **Jobs scoped to one tenant** keep using `Rhino.for_user(user).in_organization(org)`; that is still
+   the right call and is unchanged.
+
+See [Multi-Tenancy — Naming the group where no request resolves one](./multi-tenancy#naming-the-group-where-no-request-resolves-one).
+
 ## 4.7.2
 
 **A tenant boundary is a property of a route group, not of the app.** `Rhino.query` fails closed: an
@@ -65,7 +118,7 @@ model name.
 ### How to update
 
 ```ruby title="Gemfile"
-gem "rhino-rails", "~> 4.7.2"
+gem "rhino-rails", "~> 4.7.3"
 ```
 
 ```bash

@@ -382,9 +382,11 @@ get "/api/admin/dashboard", to: "admin_dashboard#summary",
 Declare those routes **before** any `:organization`-prefixed route, or `/api/admin/dashboard` is
 matched as the tenant route with `:organization = "admin"`.
 
-Outside a request — an Active Job, a rake task, the console — no group resolves, so the resolver
-keeps failing closed there regardless of this keyword. Pass the tenant explicitly with
-`Rhino.for_user(user).in_organization(org)`.
+Outside a request — an Active Job, a rake task, the console — no group resolves, so code there names
+the one it is acting as with `Rhino.in_route_group(:admin)` (optionally chained with `for_user`), or
+passes a tenant explicitly with `Rhino.for_user(user).in_organization(org)`. Naming a group that is
+not declared `tenant: false` still fails closed. See
+[Multi-Tenancy — Naming the group where no request resolves one](./multi-tenancy.md#naming-the-group-where-no-request-resolves-one).
 
 See [Multi-Tenancy — Route Groups Without a Tenant Boundary](./multi-tenancy.md#route-groups-without-a-tenant-boundary).
 

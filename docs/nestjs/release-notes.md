@@ -7,6 +7,39 @@ title: Release Notes
 
 Notable changes in each release of Rhino for NestJS, newest first.
 
+## 4.7.3
+
+**The no-request path, pinned.** 4.7.2 made the tenant boundary a property of the route group. On
+Laravel and Rails that left code with no request unable to reach a non-tenant group, and 4.7.3 adds an
+explicit `inRouteGroup()` / `in_route_group` builder there.
+
+NestJS needs no such API: `ResourceScopeService` has always taken its context explicitly, so a queued
+job or a script already names the group in the context it builds — the same `routeGroup` field a
+controller copies from `req.__routeGroup`:
+
+```ts
+// No request anywhere: this is the whole context.
+await scope.count('tasks', { user: operator, routeGroup: 'admin' });
+```
+
+This release adds test coverage pinning that behavior — a hand-built job context spanning every
+organization, and the same context naming a tenant group still failing closed — so what the docs
+promise cannot regress. The version is bumped to keep the three stacks in lockstep; there is no
+library change.
+
+### How to update
+
+```bash
+npm install @rhino-dev/rhino-nestjs@^4.7.3
+```
+
+Nothing to change, and nothing behaves differently from 4.7.2. In a back-office job, build the context
+with `routeGroup: '<group>'` for a group already declared `tenant: false` — see
+[Route Groups — Tenant Boundary](./route-groups#tenant-boundary). Jobs scoped to one tenant keep
+passing `ctx.organization`.
+
+See [Multi-Tenancy — Naming the group where there is no request](./multi-tenancy#naming-the-group-where-there-is-no-request).
+
 ## 4.7.2
 
 **A tenant boundary is a property of a route group, not of the app.** `ResourceScopeService` fails
@@ -56,7 +89,7 @@ CRUD through `GlobalController` all behave exactly as before. The 403 message no
 ### How to update
 
 ```bash
-npm install @rhino-dev/rhino-nestjs@^4.7.2
+npm install @rhino-dev/rhino-nestjs@^4.7.3
 ```
 
 Nothing else is required — a group with no `tenant` key keeps today's behavior, and the resolver still
@@ -127,7 +160,7 @@ Fully backward compatible — existing `computedAttributes` behaves exactly as b
 ### How to update
 
 ```bash
-npm install @rhino-dev/rhino-nestjs@^4.7.2
+npm install @rhino-dev/rhino-nestjs@^4.7.3
 ```
 
 Routes are registered from inside the library by `applyRhinoRouting()`, so `/computed` is served as
@@ -148,7 +181,7 @@ Fully backward compatible for single-tenant apps, models without `owner`, and re
 ### How to update
 
 ```bash
-npm install @rhino-dev/rhino-nestjs@^4.7.2
+npm install @rhino-dev/rhino-nestjs@^4.7.3
 ```
 
 Nothing to configure — the chain is resolved at boot from the `owner` values already in your
@@ -179,7 +212,7 @@ Fully backward compatible — defaults are unchanged; nothing changes unless a r
 ### How to update
 
 ```bash
-npm install @rhino-dev/rhino-nestjs@^4.7.2
+npm install @rhino-dev/rhino-nestjs@^4.7.3
 ```
 
 Then set `routeKey` on the registrations that need it, or the global `routeKey`. Clients must switch to

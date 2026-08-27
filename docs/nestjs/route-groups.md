@@ -428,7 +428,9 @@ Declaring the group also makes its prefix a **reserved segment** for
 rewritten (or rejected as an unknown tenant).
 
 A context with no `routeGroup` — a queued job, a script, a controller that forgets to pass it — keeps
-failing closed. Pass `ctx.organization` explicitly there.
+failing closed. Code with no request names the group itself (`{ routeGroup: 'admin' }`) or passes
+`ctx.organization` explicitly. Naming a group that is not declared `tenant: false` still fails closed.
+See [Multi-Tenancy — Naming the group where there is no request](./multi-tenancy.md#naming-the-group-where-there-is-no-request).
 
 See [Multi-Tenancy — Route Groups Without a Tenant Boundary](./multi-tenancy.md#route-groups-without-a-tenant-boundary).
 

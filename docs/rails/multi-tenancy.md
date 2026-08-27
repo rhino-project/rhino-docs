@@ -99,13 +99,44 @@ It removes **only** the organization filter, and only for requests served by tha
 | CRUD through the Rhino controllers | Tenant groups resolve and scope the organization exactly as before |
 
 Everything that is **not** provably a non-tenant group keeps failing closed — an unknown group, a
-request with no group, and any code running outside a request at all:
+request with no group, and any code running outside a request that does not say which group it is
+acting as.
+
+### Naming the group where no request resolves one
+
+An Active Job, a rake task or the console has no request, so nothing publishes a group and a bare
+`Rhino.query` fails closed. Such code names the group it is acting as:
 
 ```ruby
-# An Active Job or rake task resolves no route group, so this still raises
-# Rhino::MissingTenantContext. Pass the tenant explicitly instead.
+# A back-office job: the :admin group is declared `tenant: false`, so this
+# legitimately spans every organization.
+Rhino.in_route_group(:admin).query(Task).where(status: "open").count
+
+# With an operator, so the model's user-aware scopes still narrow the rows:
+Rhino.for_user(operator).in_route_group(:admin).query(Task)
+
+# Ambient calls inside the block see the group too:
+Rhino.in_route_group(:admin).run { Rhino.query(Task).count }
+```
+
+The initializer remains the single source of truth: the **named group's own** `tenant: false` is what
+lifts the boundary. Naming a tenant group — or one that is not configured — changes nothing and still
+raises, so this states a context rather than bypassing one:
+
+```ruby
+Rhino.in_route_group(:tenant).query(Task)  # still raises Rhino::MissingTenantContext
+Rhino.for_user(admin).query(Task)          # no group named → still raises
+```
+
+For a job that belongs to **one** tenant, pass that tenant instead — an explicit organization always
+scopes, in any group:
+
+```ruby
 Rhino.for_user(admin).in_organization(org).query(Task)
 ```
+
+The context is restored after the relation is built (and after `run`), so it never leaks into a later
+ambient query in a long-lived worker.
 
 :::warning Only for groups with no tenant boundary
 `tenant: false` removes the guard that turns a forgotten tenant context into a loud crash — for that

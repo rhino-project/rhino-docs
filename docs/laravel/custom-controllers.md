@@ -185,9 +185,20 @@ scopes to that organization. So the resolver remains the right entry point in a 
 still the thing applying your user-aware scopes, which a raw model query would skip.
 
 Everything else keeps failing closed: the tenant groups in the same app, a group you did not declare
-non-tenant, a route with no `route_group` default, and any code with no request at all. A queued job
-or console command resolves no route group, so it must still pass the tenant explicitly with
-`Rhino::forUser($user)->inOrganization($org)`.
+non-tenant, and a route with no `route_group` default.
+
+Code with **no request at all** — a queued job, a console command, a scheduled task — resolves no
+group either, so it says which one it is acting as:
+
+```php
+// The 'admin' group is declared 'tenant' => false, so this spans every organization.
+Rhino::inRouteGroup('admin')->query(Task::class)->count();
+Rhino::forUser($operator)->inRouteGroup('admin')->query(Task::class)->get();
+```
+
+That is a statement of context, not a bypass: the named group's own `'tenant'` key still decides, so
+`Rhino::inRouteGroup('tenant')` and an unconfigured group both still throw. A job that belongs to one
+tenant keeps using `Rhino::forUser($user)->inOrganization($org)`.
 
 See [Multi-Tenancy — Route Groups Without a Tenant Boundary](./multi-tenancy.md#route-groups-without-a-tenant-boundary)
 for the full picture and the caveat.
