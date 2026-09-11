@@ -38,6 +38,29 @@ class Post extends Model
 Fields **not** listed in these arrays are silently ignored. This is a security feature — users can't filter or sort by columns you haven't explicitly allowed.
 :::
 
+### Attribute permissions apply to queries too
+
+The allowlists above are global: they say which columns are queryable at all. The policy's [attribute permissions](./policies#attribute-level-permissions) then say which of those **this user** may query.
+
+An attribute the policy hides is refused as a filter or a sort:
+
+```bash title="terminal"
+GET /api/employees?filter[salary]=300000
+# → 403 { "message": "Filter 'salary' is not allowed" }
+
+GET /api/employees?sort=-salary
+# → 403 { "message": "Sort 'salary' is not allowed" }
+```
+
+Without this, a hidden column stayed usable as a predicate: the response never printed a salary, but narrowing the list by it told the caller what the value was, and sorting by it leaked the whole ordering.
+
+Two related rules:
+
+- **`?search=` skips hidden columns.** The client names a term, not a column, so there is nothing to refuse. The term reaches only the searchable columns this user may see. If every one of them is hidden, the search returns nothing rather than the unnarrowed list.
+- **A column the model never allowlisted is still ignored, not refused.** Refusing it would tell the caller the column exists.
+
+The model's declared `$defaultSort` is the server's own choice, so it applies regardless.
+
 ## Filtering
 
 Filter records by field values:
@@ -160,6 +183,77 @@ GET /api/routes?scope=availableForDrivers
 GET /api/routes
 ```
 
+### Scope parameters
+
+A scope can take arguments the client fills in. Declare the parameter names in the order the scope method takes them, then send them in the bracket form:
+
+```php title="app/Models/Route.php"
+public static $allowedScopes = [
+    'availableForDrivers',                       // no parameters
+    'since' => 'date',                           // one parameter
+    'window' => ['from', 'to'],                  // two, both required
+    'titled' => ['params' => ['title', 'status'], 'optional' => ['status']],
+];
+
+public function scopeSince(Builder $query, ?Authenticatable $user, $date): Builder
+{
+    return $query->where('created_at', '>=', $date);
+}
+
+public function scopeWindow(Builder $query, ?Authenticatable $user, $from, $to): Builder
+{
+    return $query->whereBetween('created_at', [$from, $to]);
+}
+```
+
+```bash title="terminal"
+# One parameter: a bare value binds to the single declared name
+GET /api/routes?scope[since]=2026-01-01
+
+# Several: every argument is named
+GET /api/routes?scope[window][from]=2026-01-01&scope[window][to]=2026-02-01
+
+# An optional parameter may simply be left out
+GET /api/routes?scope[titled][title]=Night+shift
+```
+
+Arguments bind **by name**, never by position, so the order of the keys in the URL does not matter. A positional list (`?scope[window][]=a`) is refused, and so is a bare value for a scope with more than one parameter: two arguments are never guessed at from one value.
+
+The value `true` or `false` reaches the scope as a real boolean, so a check inside the scope body cannot be fooled by the string `"false"`.
+
+A scope that declares no parameters never receives client input. Sending any is a `403`, which means a scope written without arguments can never be handed some later by a URL.
+
+### Combining scopes
+
+Up to three scopes may be combined, and they apply in the order the URL lists them:
+
+```bash title="terminal"
+GET /api/routes?scope[archived]=&scope[window][from]=2026-01-01&scope[window][to]=2026-02-01
+```
+
+The two forms cannot be mixed in one request, because they share the single `scope` query key. That is what the empty value on `archived` is for: it is how a no-argument scope joins a request that also carries one with arguments. On its own, `?scope=archived` is still the way to write it.
+
+Each scope is a fragment that narrows the set, so they compose like filters. Write scopes that are safe to combine: a scope that sets its own ordering, limit or raw join can fight another one.
+
+### Restricting scopes per user
+
+The model says which scopes exist on the wire. The policy says which of them **this user** may select:
+
+```php title="app/Policies/RoutePolicy.php"
+public function permittedScopes(?Authenticatable $user): array
+{
+    if ($user?->hasRole('dispatcher')) {
+        return ['*']; // every scope the model declares
+    }
+
+    return ['availableForDrivers'];
+}
+```
+
+The default is `['*']`, so a policy written before this existed keeps allowing every declared scope. A denied scope and an undeclared one return the **same** message, so the endpoint never reveals which scopes a model has.
+
+The model's `$defaultScope` is applied by the server when the client sends no scope at all, so it is not subject to this list. Requesting it by name is.
+
 ### Best practices for complex scopes
 
 Once a scope grows past a couple of clauses — joins, subqueries, per-user or per-role logic — move it out of the model into its own class. These are the rules that keep a complex named scope correct and safe.
@@ -250,9 +344,25 @@ The one-line `scopeXxx` on the model is all the wiring the framework needs; ever
 Unlike filters and sorts, an unknown or non-whitelisted scope name is **not** silently ignored — it returns a `403`, mirroring the [include-authorization](#include-authorization) behavior:
 
 ```bash title="terminal"
-# 'archived' is not in $allowedScopes:
+# 'archived' is not in $allowedScopes, or the policy does not permit it:
 GET /api/routes?scope=archived
 # → 403 { "message": "Scope 'archived' is not allowed" }
+```
+
+Argument mistakes are refused the same way, and these messages do name the parameter, because they are only ever reached after the scope itself was allowed for this user:
+
+```bash title="terminal"
+GET /api/routes?scope[window][from]=2026-01-01
+# → 403 { "message": "Scope 'window' requires parameter 'to'" }
+
+GET /api/routes?scope[window][nope]=1
+# → 403 { "message": "Scope 'window' does not accept parameter 'nope'" }
+
+GET /api/routes?scope[window]=a,b
+# → 403 { "message": "Scope 'window' requires named parameters" }
+
+GET /api/routes?scope[availableForDrivers]=yesterday
+# → 403 { "message": "Scope 'availableForDrivers' does not accept arguments" }
 ```
 
 Requesting the declared default scope by name (`?scope=active`) is always allowed, even if you did not list it in `$allowedScopes`.

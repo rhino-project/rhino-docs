@@ -7,6 +7,50 @@ title: Release Notes
 
 Notable changes in each release of Rhino for NestJS, newest first.
 
+## 4.8.0
+
+**Named scopes take arguments.** A scope used to be a name and nothing else, so anything the client
+needed to vary had to be expressed as a filter -- which meant exposing the column and hoping the
+client composed the predicate correctly. A scope class can now declare the parameters the client
+fills in, and read the bound values from `ctx.args`:
+
+```ts
+export class WindowScope implements RhinoNamedScope {
+  static params = ['from', 'to'];
+  static optionalParams = ['to'];
+
+  apply(ctx: ScopeContext) {
+    return { createdAt: { gte: ctx.args!.from, lte: ctx.args!.to } };
+  }
+}
+```
+
+```bash
+GET /api/routes?scope[since]=2026-01-01
+GET /api/routes?scope[window][from]=2026-01-01&scope[window][to]=2026-02-01
+```
+
+Arguments bind by name. `?scope=name` still works exactly as before, and a scope that declares no
+parameters still never receives client input: sending any is a 403.
+
+Up to three scopes may be combined in the bracket form, applied in the order the URL lists them. The
+two forms cannot be mixed in one request, since they share the `scope` query key -- write a
+no-argument scope as `?scope[archived]=` when combining it with one that takes arguments.
+
+**Policies choose which scopes a user may select.** The new `permittedScopes(user, org?)` returns
+`['*']` by default, so nothing changes until you override it. A denied scope and an undeclared one
+return the same message, so the endpoint never reveals which scopes a model has.
+
+**Attribute permissions now gate filters, sorts and search.** This closes a real leak. Hiding an
+attribute in a policy only affected serialization, so a hidden column stayed usable as a query
+predicate: `?filter[salary]=300000` never printed a salary but told the caller whose salary it was,
+and `?sort=-salary` leaked the whole ordering. Both now return 403. `?search=` names a term rather
+than a column, so it simply skips the columns this user may not see, and returns nothing when all of
+them are hidden. A column the model never allowlisted is still ignored rather than refused, and the
+model's own `defaultSort` is unaffected. A dotted relation field (`author.name`) is not gated: the
+related model's policy is not reachable from the query builder, so gate it in that model's
+`allowedSearch`.
+
 ## 4.7.3
 
 **The no-request path, pinned.** 4.7.2 made the tenant boundary a property of the route group. On

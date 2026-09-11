@@ -237,7 +237,7 @@ Every static property below is optional — declare only what differs from the d
 | `$allowedSearch` | Fields swept by `?search=` (relations allowed, e.g. `user.name`) |
 | `$allowedIncludes` | Relationships loadable with `?include=` |
 | `$allowedFields` | Columns selectable with `?fields[table]=` |
-| `$allowedScopes` / `$defaultScope` | Named scopes selectable with `?scope=`, and the one applied by default ([Querying](./querying#named-scopes)) |
+| `$allowedScopes` / `$defaultScope` | Named scopes selectable with `?scope=` (with optional declared parameters), and the one applied by default ([Querying](./querying#named-scopes)) |
 | `$paginationEnabled` / `$perPage` | Pagination toggle and page size |
 | `$middleware` / `$middlewareActions` | Middleware for all routes, or per action |
 | `$exceptActions` | CRUD actions to *not* generate (`index`, `show`, `store`, `update`, `destroy`, `computed`) |
@@ -299,13 +299,13 @@ All of these compose in a single request. Full reference: [Querying](./querying)
 
 | Parameter | Example | Behavior on an unknown value |
 |---|---|---|
-| `?filter[field]=` | `?filter[status]=draft,published` (comma = OR) | Ignored |
-| `?sort=` | `?sort=status,-created_at` | Ignored |
+| `?filter[field]=` | `?filter[status]=draft,published` (comma = OR) | Ignored; **403** if the policy hides the attribute |
+| `?sort=` | `?sort=status,-created_at` | Ignored; **403** if the policy hides the attribute |
 | `?search=` | `?search=laravel` | — |
 | `?include=` | `?include=user,comments.user`, `?include=commentsCount` | **403** if the user lacks `viewAny` on the included resource |
 | `?fields[table]=` | `?fields[posts]=id,title` | Ignored |
 | `?page=` / `?per_page=` | `?page=2&per_page=25` | — |
-| `?scope=` | `?scope=availableForDrivers` | **403** if not whitelisted |
+| `?scope=` | `?scope=availableForDrivers`, `?scope[window][from]=a&scope[window][to]=b` | **403** if not whitelisted, not permitted by the policy, or the arguments do not match the declared parameters |
 | `?computed_attributes=` | `?computed_attributes=avatar_url` | **403** if undeclared or denied |
 
 Pagination metadata comes back in **headers**, not the body: `X-Current-Page`, `X-Last-Page`,
@@ -346,6 +346,10 @@ Outside a tenant context, permissions come from `users.permissions`. Use
 | `hiddenAttributesForShow()` | Read blacklist — always wins |
 | `permittedAttributesForCreate()` | Writable fields on `store` |
 | `permittedAttributesForUpdate()` | Writable fields on `update` |
+| `permittedScopes()` | Named scopes this user may select with `?scope=` (`['*']` = all declared) |
+
+A hidden attribute is hidden from **queries** too: it cannot be used as a `?filter[]` or a `?sort`,
+and `?search=` skips it.
 
 ### 7. Multi-tenancy
 

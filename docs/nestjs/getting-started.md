@@ -292,7 +292,7 @@ no base class and no decorators. Full reference: [Models](./models).
 | `allowedSearch` | Fields swept by `?search=` (relation dot notation allowed) |
 | `allowedIncludes` | Prisma relations loadable with `?include=` |
 | `allowedFields` | Fields selectable with `?fields[model]=` |
-| `namedScopes` / `defaultScope` | Scopes selectable with `?scope=`, and the one applied by default ([Querying](./querying#named-scopes)) |
+| `namedScopes` / `defaultScope` | Scopes selectable with `?scope=` (with optional declared parameters), and the one applied by default ([Querying](./querying#named-scopes)) |
 | `scopes` | Always-on scope classes applied to **every** query |
 | `paginationEnabled` / `perPage` | Pagination toggle (default `true`) and page size (default 25) |
 | `softDeletes` | Enables trashed/restore/force-delete; requires a `deletedAt` column |
@@ -339,13 +339,13 @@ All of these compose in a single request. Full reference: [Querying](./querying)
 
 | Parameter | Example | Behavior on an unknown value |
 |---|---|---|
-| `?filter[field]=` | `?filter[status]=draft,published` (comma = OR) | Ignored |
-| `?sort=` | `?sort=status,-createdAt` | Ignored |
+| `?filter[field]=` | `?filter[status]=draft,published` (comma = OR) | Ignored; **403** if the policy hides the attribute |
+| `?sort=` | `?sort=status,-createdAt` | Ignored; **403** if the policy hides the attribute |
 | `?search=` | `?search=nest` | — |
 | `?include=` | `?include=author,comments` | **403** if the user lacks index permission on the included resource |
 | `?fields[model]=` | `?fields[posts]=id,title` | Ignored |
 | `?page=` / `?per_page=` | `?page=2&per_page=25` | — |
-| `?scope=` | `?scope=availableForDrivers` | **403** if not whitelisted |
+| `?scope=` | `?scope=availableForDrivers`, `?scope[window][from]=a&scope[window][to]=b` | **403** if not whitelisted, not permitted by the policy, or the arguments do not match the declared parameters |
 | `?computed_attributes=` | `?computed_attributes=avatarUrl` (`?computedAttributes=` is an alias) | **403** if undeclared or denied |
 
 Pagination metadata comes back in **headers**: `X-Current-Page`, `X-Last-Page`, `X-Per-Page`,
@@ -384,6 +384,10 @@ layer. Full detail: [Policies](./policies).
 | `hiddenAttributesForShow(user, org?)` | Read blacklist — always wins |
 | `permittedAttributesForCreate(user, org?)` | Writable fields on create |
 | `permittedAttributesForUpdate(user, org?)` | Writable fields on update |
+| `permittedScopes(user, org?)` | Named scopes this user may select with `?scope=` (`['*']` = all declared) |
+
+A hidden attribute is hidden from **queries** too: it cannot be used as a `?filter[]` or a `?sort`,
+and `?search=` skips it.
 
 ### 6. Multi-tenancy
 

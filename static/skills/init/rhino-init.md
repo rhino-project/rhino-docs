@@ -457,9 +457,10 @@ Request
 | 5 | **Attribute-Level Permissions** | Control which fields each role can read and write |
 | 6 | **Validation** | Dual-layer: format rules + field presence rules. Supports role-keyed rules |
 | 7 | **Cross-Tenant FK Validation** | `exists:` rules auto-scoped to current organization |
-| 8 | **Filtering** | `?filter[field]=value` with AND/OR logic |
-| 9 | **Sorting** | `?sort=field` or `?sort=-field`, supports multiple fields |
-| 10 | **Full-Text Search** | `?search=term` across `allowedSearch` fields |
+| 8 | **Filtering** | `?filter[field]=value` with AND/OR logic. An attribute the policy hides returns 403 |
+| 9 | **Sorting** | `?sort=field` or `?sort=-field`, supports multiple fields. An attribute the policy hides returns 403 |
+| 10 | **Full-Text Search** | `?search=term` across `allowedSearch` fields, skipping the ones the policy hides |
+| 10a | **Named Scopes** | `?scope=name`, or `?scope[name][param]=value` for a scope with declared parameters. Gated by the model whitelist and the policy's `permittedScopes()` |
 | 11 | **Pagination** | `?page=N&per_page=N` with metadata headers |
 | 12 | **Field Selection** | `?fields[posts]=id,title` to reduce payload |
 | 13 | **Eager Loading** | `?include=user,comments` with nested support and count/exists |

@@ -251,9 +251,29 @@ end
 
 When `permitted_attributes_for_show` returns a specific list (not `['*']`), all columns not in the list are automatically hidden from API responses. The `hidden_attributes_for_show` blacklist is then merged on top, ensuring those fields are removed even if they appear in the whitelist.
 
+The same two methods also gate **querying**: a hidden attribute cannot be used as a `?filter[]` or a `?sort`, and `?search=` skips it. See [attribute permissions apply to queries too](./querying#attribute-permissions-apply-to-queries-too).
+
 :::info
 Both methods receive `nil` when there is no authenticated user. Always handle the `nil` case.
 :::
+
+### Scope Permissions
+
+Control which [named scopes](./querying#named-scopes) a user may select with `?scope=`:
+
+```ruby title="app/policies/route_policy.rb"
+class RoutePolicy < Rhino::ResourcePolicy
+  def permitted_scopes(user)
+    return ["*"] if has_role?(user, "dispatcher")
+
+    ["available_for_drivers"]
+  end
+end
+```
+
+The model's `rhino_scopes` says which scopes exist on the wire; this says which of them this user may pick. The effective set is the intersection, so the policy can only narrow the model's declaration. Names are the underscored form.
+
+The default is `["*"]`. A scope denied here returns the same `403` message as one that does not exist, so the endpoint never reveals which scopes a model has. The model's `rhino_default_scope` is applied by the server when the client sends no scope at all, so it is not subject to this list; requesting it by name is.
 
 ### Field Permissions (Write)
 

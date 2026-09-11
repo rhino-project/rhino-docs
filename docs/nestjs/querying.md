@@ -39,6 +39,30 @@ posts: {
 Fields **not** listed in these arrays are silently ignored. This is a security feature -- users cannot filter or sort by columns you have not explicitly allowed.
 :::
 
+### Attribute permissions apply to queries too
+
+The arrays above are global: they say which columns are queryable at all. The policy's [attribute permissions](./policies#attribute-permissions) then say which of those **this user** may query.
+
+An attribute the policy hides is refused as a filter or a sort:
+
+```bash title="terminal"
+GET /api/employees?filter[salary]=300000
+# 403 { "code": "FORBIDDEN", "message": "Filter 'salary' is not allowed", "details": {} }
+
+GET /api/employees?sort=-salary
+# 403 { "code": "FORBIDDEN", "message": "Sort 'salary' is not allowed", "details": {} }
+```
+
+Without this, a hidden column stayed usable as a predicate: the response never printed a salary, but narrowing the list by it told the caller what the value was, and sorting by it leaked the whole ordering.
+
+Three related rules:
+
+- **`?search=` skips hidden columns.** The client names a term, not a column, so there is nothing to refuse. The term reaches only the searchable columns this user may see. If every one of them is hidden, the search returns nothing rather than the unnarrowed list.
+- **A column the model never allowlisted is still ignored, not refused.** Refusing it would tell the caller the column exists.
+- **A dotted relation field (`author.name`) is not gated here.** The related model's own policy is not reachable from the query builder, so gate it in that model's `allowedSearch` instead.
+
+The model's declared `defaultSort` is the server's own choice, so it applies regardless.
+
 ## Filtering
 
 Filter records by field values:
@@ -188,6 +212,82 @@ GET /api/routes?scope=availableForDrivers
 GET /api/routes
 ```
 
+### Scope parameters
+
+A scope can take arguments the client fills in. Declare the parameter names as statics on the scope class, in the order you want to read them, and the bound values arrive as `ctx.args`:
+
+```ts title="src/scopes/WindowScope.ts"
+import type { RhinoNamedScope, ScopeContext } from '@rhino-dev/rhino-nestjs';
+
+export class WindowScope implements RhinoNamedScope {
+  static params = ['from', 'to'];
+  static optionalParams = ['to'];
+
+  apply(ctx: ScopeContext): Record<string, any> {
+    const where: Record<string, any> = { createdAt: { gte: ctx.args!.from } };
+    if (ctx.args!.to !== undefined) where.createdAt.lte = ctx.args!.to;
+    return where;
+  }
+}
+```
+
+```bash title="terminal"
+# One parameter: a bare value binds to the single declared name
+GET /api/routes?scope[since]=2026-01-01
+
+# Several: every argument is named
+GET /api/routes?scope[window][from]=2026-01-01&scope[window][to]=2026-02-01
+
+# An optional parameter may simply be left out
+GET /api/routes?scope[window][from]=2026-01-01
+```
+
+Arguments bind **by name**, never by position, so the order of the keys in the URL does not matter. A positional list (`?scope[window][]=a`) is refused, and so is a bare value for a scope with more than one parameter: two arguments are never guessed at from one value.
+
+The value `true` or `false` reaches the scope as a real boolean, so a check inside `apply` cannot be fooled by the string `"false"`.
+
+A scope that declares no parameters never receives client input. Sending any is a `403`, which means a scope written without arguments can never be handed some later by a URL.
+
+:::info Bracket syntax needs the extended query parser
+`?scope[window][from]=a` and `?filter[status]=draft` both rely on Express parsing bracket syntax into a nested object. Express 4, which `@nestjs/platform-express` 10 ships, does that by default. If your app runs the **simple** query parser (Express 5's default), turn the extended one back on so these parameters arrive as objects rather than as literal key names:
+
+```ts title="src/main.ts"
+const app = await NestFactory.create(AppModule);
+app.set('query parser', 'extended');
+```
+:::
+
+### Combining scopes
+
+Up to three scopes may be combined, and they apply in the order the URL lists them:
+
+```bash title="terminal"
+GET /api/routes?scope[archived]=&scope[window][from]=2026-01-01&scope[window][to]=2026-02-01
+```
+
+The two forms cannot be mixed in one request, because they share the single `scope` query key. That is what the empty value on `archived` is for: it is how a no-argument scope joins a request that also carries one with arguments. On its own, `?scope=archived` is still the way to write it.
+
+Each scope returns a fragment that is ANDed into the query, so they compose like filters.
+
+### Restricting scopes per user
+
+The model registration says which scopes exist on the wire. The policy says which of them **this user** may select:
+
+```ts title="src/policies/RoutePolicy.ts"
+import { ResourcePolicy } from '@rhino-dev/rhino-nestjs';
+
+export class RoutePolicy extends ResourcePolicy {
+  permittedScopes(user: any): string[] {
+    if (this.hasRole(user, 'dispatcher')) return ['*'];
+    return ['availableForDrivers'];
+  }
+}
+```
+
+The default is `['*']`, so a policy written before this existed keeps allowing every declared scope. A denied scope and an undeclared one return the **same** message, so the endpoint never reveals which scopes a model has.
+
+The model's `defaultScope` is applied by the server when the client sends no scope at all, so it is not subject to this list. Requesting it by name is.
+
 ### Best practices for complex scopes
 
 The inline example above fits on a screen. Once a scope grows past a couple of clauses -- relation joins, subqueries, per-user or per-role logic -- move it into its own class instead of inlining a growing object literal. The patterns below keep a named scope safe, cheap, and testable.
@@ -311,9 +411,22 @@ Assert on the returned fragment shape, not on database rows. The whole point of 
 Unlike filters and sorts, an unknown or non-whitelisted scope name is **not** silently ignored -- it returns a `403` using the standard `RhinoException` envelope, mirroring the [include-authorization](#include-authorization) behavior:
 
 ```bash title="terminal"
-# 'archived' is not in namedScopes:
+# 'archived' is not in namedScopes, or the policy does not permit it:
 GET /api/routes?scope=archived
 # 403 { "code": "FORBIDDEN", "message": "Scope 'archived' is not allowed", "details": {} }
+```
+
+Argument mistakes are refused the same way, and these messages do name the parameter, because they are only ever reached after the scope itself was allowed for this user:
+
+```bash title="terminal"
+GET /api/routes?scope[window][from]=2026-01-01
+# 403 "Scope 'window' requires parameter 'to'"
+
+GET /api/routes?scope[window][nope]=1
+# 403 "Scope 'window' does not accept parameter 'nope'"
+
+GET /api/routes?scope[window]=a,b
+# 403 "Scope 'window' requires named parameters"
 ```
 
 Requesting the declared default scope by name (`?scope=active`) is always allowed.

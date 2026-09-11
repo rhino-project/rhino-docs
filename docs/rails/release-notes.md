@@ -7,6 +7,49 @@ title: Release Notes
 
 Notable changes in each release of Rhino for Rails, newest first.
 
+## 4.8.0
+
+**Named scopes take arguments.** A scope used to be a name and nothing else, so anything the client
+needed to vary had to be expressed as a filter — which meant exposing the column and hoping the
+client composed the predicate correctly. A scope can now declare parameters the client fills in:
+
+```ruby
+rhino_scopes :archived,
+             since:  { params: [:date] },
+             window: { params: %i[from to] },
+             titled: { params: %i[title status], optional: [:status] },
+             mine:   { params: [:status], with: ->(rel, user, status) { ... } }
+```
+
+```bash
+GET /api/routes?scope[since]=2026-01-01
+GET /api/routes?scope[window][from]=2026-01-01&scope[window][to]=2026-02-01
+```
+
+Arguments bind by name and reach the scope in declared order. `?scope=name` still works exactly as
+before, and a scope that declares no parameters still never receives client input: sending any is a
+403. A `Rhino::ResourceScope` subclass receives them as extra arguments to `apply`.
+
+Up to three scopes may be combined in the bracket form, applied in the order the URL lists them. The
+two forms cannot be mixed in one request, since they share the `scope` query key — write a
+no-argument scope as `?scope[archived]=` when combining it with one that takes arguments.
+
+**Policies choose which scopes a user may select.** The new `permitted_scopes(user)` returns `["*"]`
+by default, so nothing changes until you override it. A denied scope and an undeclared one return the
+same message, so the endpoint never reveals which scopes a model has.
+
+**Attribute permissions now gate filters, sorts and search.** This closes a real leak. Hiding an
+attribute in a policy only affected serialization, so a hidden column stayed usable as a query
+predicate: `?filter[salary]=300000` never printed a salary but told the caller whose salary it was,
+and `?sort=-salary` leaked the whole ordering. Both now return 403. `?search=` names a term rather
+than a column, so it simply skips the columns this user may not see, and returns nothing when all of
+them are hidden. A column the model never allowlisted is still ignored rather than refused.
+
+**Sorting is deny by default.** `?sort=` used to accept **any** column on a model that declared no
+`rhino_sorts`, which is how a hidden column could be ordered by without ever being allowlisted. An
+empty sort list now allows nothing, matching Laravel and NestJS. A model that relied on the old
+behavior must declare `rhino_sorts`. The declared `rhino_default_sort` is unaffected.
+
 ## 4.7.3
 
 **Jobs and rake tasks can name their route group.** 4.7.2 made the tenant boundary a property of the

@@ -39,6 +39,30 @@ end
 Fields **not** listed in these DSL calls are silently ignored. This is a security feature — users can't filter or sort by columns you haven't explicitly allowed.
 :::
 
+### Attribute permissions apply to queries too
+
+The DSL calls above are global: they say which columns are queryable at all. The policy's [attribute permissions](./policies#attribute-permissions) then say which of those **this user** may query.
+
+An attribute the policy hides is refused as a filter or a sort:
+
+```bash title="terminal"
+GET /api/employees?filter[salary]=300000
+# → 403 { "message": "Filter 'salary' is not allowed" }
+
+GET /api/employees?sort=-salary
+# → 403 { "message": "Sort 'salary' is not allowed" }
+```
+
+Without this, a hidden column stayed usable as a predicate: the response never printed a salary, but narrowing the list by it told the caller what the value was, and sorting by it leaked the whole ordering.
+
+Three related rules:
+
+- **`?search=` skips hidden columns.** The client names a term, not a column, so there is nothing to refuse. The term reaches only the searchable columns this user may see. If every one of them is hidden, the search returns nothing rather than the unnarrowed list.
+- **A column the model never allowlisted is still ignored, not refused.** Refusing it would tell the caller the column exists.
+- **Sorting is deny by default.** A model that declares no `rhino_sorts` accepts no `?sort` at all. It used to accept any column.
+
+The declared `rhino_default_sort` is the server's own choice, so it applies regardless.
+
 ## Filtering
 
 Filter records by field values:
@@ -171,6 +195,79 @@ GET /api/routes?scope=availableForDrivers
 GET /api/routes
 ```
 
+### Scope parameters
+
+A scope can take arguments the client fills in. Declare the parameter names in the order the scope takes them, then send them in the bracket form:
+
+```ruby title="app/models/route.rb"
+class Route < Rhino::RhinoModel
+  rhino_scopes :available_for_drivers,                          # no parameters
+               since:  { params: [:date] },                     # one parameter
+               window: { params: %i[from to] },                 # two, both required
+               titled: { params: %i[title status], optional: [:status] },
+               mine:   { params: [:status],
+                         with: ->(relation, user, status) { relation.where(user: user, status: status) } }
+
+  scope :since,  ->(date) { where("created_at >= ?", date) }
+  scope :window, ->(from, to) { where(created_at: from..to) }
+end
+```
+
+```bash title="terminal"
+# One parameter: a bare value binds to the single declared name
+GET /api/routes?scope[since]=2026-01-01
+
+# Several: every argument is named
+GET /api/routes?scope[window][from]=2026-01-01&scope[window][to]=2026-02-01
+
+# An optional parameter may simply be left out
+GET /api/routes?scope[titled][title]=Night+shift
+```
+
+Arguments bind **by name**, never by position, so the order of the keys in the URL does not matter. A positional list (`?scope[window][]=a`) is refused, and so is a bare value for a scope with more than one parameter: two arguments are never guessed at from one value. Parameter names are camelCase on the wire and underscored internally, exactly like scope names.
+
+The value `true` or `false` reaches the scope as a real boolean, so a check inside the scope body cannot be fooled by the string `"false"`.
+
+A scope that declares no parameters never receives client input. Sending any is a `403`, which means a scope written without arguments can never be handed some later by a URL. A `Rhino::ResourceScope` subclass receives them as extra arguments to `apply`:
+
+```ruby
+class WindowScope < Rhino::ResourceScope
+  def apply(relation, from, to)
+    relation.where(created_at: from..to)
+  end
+end
+```
+
+### Combining scopes
+
+Up to three scopes may be combined, and they apply in the order the URL lists them:
+
+```bash title="terminal"
+GET /api/routes?scope[archived]=&scope[window][from]=2026-01-01&scope[window][to]=2026-02-01
+```
+
+The two forms cannot be mixed in one request, because they share the single `scope` query key. That is what the empty value on `archived` is for: it is how a no-argument scope joins a request that also carries one with arguments. On its own, `?scope=archived` is still the way to write it.
+
+Each scope is a fragment that narrows the set, so they compose like filters. Write scopes that are safe to combine: a scope that sets its own ordering, limit or raw join can fight another one.
+
+### Restricting scopes per user
+
+The model says which scopes exist on the wire. The policy says which of them **this user** may select:
+
+```ruby title="app/policies/route_policy.rb"
+class RoutePolicy < Rhino::ResourcePolicy
+  def permitted_scopes(user)
+    return ["*"] if has_role?(user, "dispatcher")
+
+    ["available_for_drivers"]
+  end
+end
+```
+
+The default is `["*"]`, so a policy written before this existed keeps allowing every declared scope. A denied scope and an undeclared one return the **same** message, so the endpoint never reveals which scopes a model has.
+
+The model's `rhino_default_scope` is applied by the server when the client sends no scope at all, so it is not subject to this list. Requesting it by name is.
+
 ### Best practices for complex scopes
 
 Once a scope grows past a couple of clauses — joins, subqueries, per-user or per-role logic — move it out of the model and into its own class. A scope is a pure query transformation: `(relation, context) -> narrowed relation`, and keeping it that way is what makes it safe to run on every list request.
@@ -270,9 +367,22 @@ end
 Unlike filters and sorts, an unknown or non-whitelisted scope name is **not** silently ignored — it returns a `403`, mirroring the [include-authorization](#include-authorization) behavior:
 
 ```bash title="terminal"
-# 'archived' is not whitelisted:
+# 'archived' is not whitelisted, or the policy does not permit it:
 GET /api/routes?scope=archived
 # → 403 { "message": "Scope 'archived' is not allowed" }
+```
+
+Argument mistakes are refused the same way, and these messages do name the parameter, because they are only ever reached after the scope itself was allowed for this user:
+
+```bash title="terminal"
+GET /api/routes?scope[window][from]=2026-01-01
+# → 403 { "message": "Scope 'window' requires parameter 'to'" }
+
+GET /api/routes?scope[window][nope]=1
+# → 403 { "message": "Scope 'window' does not accept parameter 'nope'" }
+
+GET /api/routes?scope[window]=a,b
+# → 403 { "message": "Scope 'window' requires named parameters" }
 ```
 
 Requesting the declared default scope by name (`?scope=active`) is always allowed.

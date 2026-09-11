@@ -261,9 +261,30 @@ When `permittedAttributesForShow()` returns a specific list (not `['*']`), all c
 
 On the model side, the `HidableColumns` trait calls these methods when serializing. The hidden fields are stripped from every API response automatically.
 
+The same two methods also gate **querying**: a hidden attribute cannot be used as a `?filter[]` or a `?sort`, and `?search=` skips it. See [attribute permissions apply to queries too](./querying#attribute-permissions-apply-to-queries-too).
+
 :::info
 Both methods receive `null` when there is no authenticated user (e.g., public endpoints). Always handle the `null` case.
 :::
+
+### Scope Permissions
+
+Control which [named scopes](./querying#named-scopes) a user may select with `?scope=`:
+
+```php title="app/Policies/RoutePolicy.php"
+public function permittedScopes(?Authenticatable $user): array
+{
+    if ($user?->hasRole('dispatcher')) {
+        return ['*']; // Every scope the model declares
+    }
+
+    return ['availableForDrivers'];
+}
+```
+
+The model's `$allowedScopes` says which scopes exist on the wire; this says which of them this user may pick. The effective set is the intersection, so the policy can only narrow the model's declaration.
+
+The default is `['*']`. A scope denied here returns the same `403` message as one that does not exist, so the endpoint never reveals which scopes a model has. The model's `$defaultScope` is applied by the server when the client sends no scope at all, so it is not subject to this list; requesting it by name is.
 
 ### Field Permissions (Write)
 

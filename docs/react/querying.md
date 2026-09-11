@@ -21,7 +21,7 @@ interface ModelQueryOptions {
   sort?: string;
   fields?: string[];
   search?: string;
-  scope?: string;
+  scope?: string | ScopeSelection;
   computedAttributes?: string[];
   page?: number;
   perPage?: number;
@@ -491,12 +491,46 @@ It also works with `useModelTrashed`:
 const { data } = useModelTrashed('routes', { scope: 'active' });
 ```
 
+### Scopes with arguments
+
+A scope can take arguments the server declares. Pass an object instead of a name: the key is the scope, and the value is its argument.
+
+```tsx
+// One declared parameter: a bare value
+useModelIndex('routes', { scope: { since: '2026-01-01' } });
+// GET /api/routes?scope[since]=2026-01-01
+
+// Several: an object of parameter name to value
+useModelIndex('routes', { scope: { window: { from: '2026-01-01', to: '2026-02-01' } } });
+// GET /api/routes?scope[window][from]=2026-01-01&scope[window][to]=2026-02-01
+
+// A scope that takes no arguments, written in the object form
+useModelIndex('routes', { scope: { archived: null } });
+// GET /api/routes?scope[archived]=
+```
+
+Up to three scopes may be combined, and they apply in key order:
+
+```tsx
+useModelIndex('routes', {
+  scope: { archived: null, since: '2026-01-01' },
+});
+```
+
+Use the object form for every scope in a request that needs arguments: the string form and the object form cannot be mixed, because they share the one `scope` query key. A plain `scope: 'archived'` is still the way to select a single no-argument scope.
+
+Arguments the server did not declare, a missing required one, or a bare value for a scope with several parameters all return **403** with a message naming the parameter.
+
 :::info Not applied by `useModelShow`
 `scope` narrows list results, so it applies to `useModelIndex` and `useModelTrashed`. It is **not** applied by `useModelShow` (single-record fetches are not scoped).
 :::
 
 :::warning Unknown scopes return 403
-Unlike filters and sorts (which the server silently ignores when not allowed), a scope name the model has not whitelisted causes the request to **403**. This surfaces through the client's `onForbidden` path — handle it like any other authorization failure.
+A scope name the model has not whitelisted, or that the user's policy does not permit, causes the request to **403**. Both cases return the same message. This surfaces through the client's `onForbidden` path — handle it like any other authorization failure.
+:::
+
+:::warning Filtering or sorting by a hidden attribute returns 403
+An attribute the server's policy hides from this user cannot be used in `filters` or `sort`. A column the model never allowlisted is still ignored silently, as before; it is only the hidden ones that refuse.
 :::
 
 ### Worked Example: driver routes

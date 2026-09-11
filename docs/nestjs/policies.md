@@ -209,6 +209,21 @@ override permittedAttributesForShow(user: any, org?: any): string[] {
 }
 ```
 
+Both attribute methods also gate **querying**: a hidden attribute cannot be used as a `?filter[]` or a `?sort`, and `?search=` skips it. See [attribute permissions apply to queries too](./querying#attribute-permissions-apply-to-queries-too).
+
+### `permittedScopes(user, org?)`
+
+Returns the [named scopes](./querying#named-scopes) this user may select with `?scope=`. Return `['*']` (default) to allow every scope the model registration declares.
+
+```ts
+override permittedScopes(user: any, org?: any): string[] {
+  if (this.hasRole(user, 'dispatcher', org)) return ['*'];
+  return ['availableForDrivers'];
+}
+```
+
+The model's `namedScopes` says which scopes exist on the wire; this says which of them this user may pick. The effective set is the intersection, so the policy can only narrow the registration. A scope denied here returns the same 403 message as one that does not exist, so the endpoint never reveals which scopes a model has. The model's `defaultScope` is applied by the server when the client sends no scope at all, so it is not subject to this list; requesting it by name is.
+
 ### `permittedAttributesForCreate(user, org?)`
 
 Returns an array of attribute names the user is allowed to **send** when creating a record. Fields not in this list trigger a **403 Forbidden** response. Return `['*']` (default) to allow all attributes.
