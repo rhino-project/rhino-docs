@@ -235,6 +235,10 @@ The two forms cannot be mixed in one request, because they share the single `sco
 
 Each scope is a fragment that narrows the set, so they compose like filters. Write scopes that are safe to combine: a scope that sets its own ordering, limit or raw join can fight another one.
 
+:::info Why three
+The limit is about blast radius, not about a number anyone hits. A named scope is an arbitrary query fragment, so each one may add joins or subqueries; stacking many of them is how you end up with an accidental cross join, or a query nobody can explain from reading the URL. Three covers the shapes that come up in practice — a base scope, a window, and one more predicate.
+:::
+
 ### Restricting scopes per user
 
 The model says which scopes exist on the wire. The policy says which of them **this user** may select:

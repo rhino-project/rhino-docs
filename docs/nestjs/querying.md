@@ -267,7 +267,11 @@ GET /api/routes?scope[archived]=&scope[window][from]=2026-01-01&scope[window][to
 
 The two forms cannot be mixed in one request, because they share the single `scope` query key. That is what the empty value on `archived` is for: it is how a no-argument scope joins a request that also carries one with arguments. On its own, `?scope=archived` is still the way to write it.
 
-Each scope returns a fragment that is ANDed into the query, so they compose like filters.
+Each scope returns a fragment that is ANDed into the query, so they compose like filters. Write scopes that are safe to combine: one that constrains the same relation as another, or that leans on a specific ordering, can fight it.
+
+:::info Why three
+The limit is about blast radius, not about a number anyone hits. A named scope is an arbitrary where-fragment, so each one may add relation filters of its own; stacking many of them is how you end up with a query nobody can explain from reading the URL. Three covers the shapes that come up in practice -- a base scope, a window, and one more predicate.
+:::
 
 ### Restricting scopes per user
 
