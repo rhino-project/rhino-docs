@@ -7,6 +7,25 @@ title: Release Notes
 
 Notable changes in each release of Rhino for NestJS, newest first.
 
+## 4.8.1
+
+**The named-scope cap is configurable.** How many scopes one request may combine is now the root
+`maxScopesPerRequest` key, defaulting to the same 3 as before:
+
+```ts title="src/rhino.config.ts"
+RhinoModule.forRoot({
+  maxScopesPerRequest: 3,
+  models: { /* ... */ },
+});
+```
+
+A value below 1 is ignored rather than locking every scope out of every request.
+
+The [Combining scopes](./querying#combining-scopes) docs now also explain what the cap is protecting
+you from, with a worked example: two `some` filters on the same relation, contributed by two
+different scopes, are two independent existence checks -- so a row can satisfy them with two
+different related records, which is rarely what the caller meant.
+
 ## 4.8.0
 
 **Named scopes take arguments.** A scope used to be a name and nothing else, so anything the client

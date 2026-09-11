@@ -259,7 +259,7 @@ app.set('query parser', 'extended');
 
 ### Combining scopes
 
-Up to three scopes may be combined, and they apply in the order the URL lists them:
+Several scopes may be combined — three by default, set by `maxScopesPerRequest` — and they apply in the order the URL lists them:
 
 ```bash title="terminal"
 GET /api/routes?scope[archived]=&scope[window][from]=2026-01-01&scope[window][to]=2026-02-01
@@ -267,10 +267,50 @@ GET /api/routes?scope[archived]=&scope[window][from]=2026-01-01&scope[window][to
 
 The two forms cannot be mixed in one request, because they share the single `scope` query key. That is what the empty value on `archived` is for: it is how a no-argument scope joins a request that also carries one with arguments. On its own, `?scope=archived` is still the way to write it.
 
-Each scope returns a fragment that is ANDed into the query, so they compose like filters. Write scopes that are safe to combine: one that constrains the same relation as another, or that leans on a specific ordering, can fight it.
+Each scope narrows the set, so they compose like filters — with one caveat worth reading before you rely on it.
 
-:::info Why three
-The limit is about blast radius, not about a number anyone hits. A named scope is an arbitrary where-fragment, so each one may add relation filters of its own; stacking many of them is how you end up with a query nobody can explain from reading the URL. Three covers the shapes that come up in practice -- a base scope, a window, and one more predicate.
+:::warning Chained scopes share one query
+The cap is about blast radius, not about a number anyone hits. Every scope in a request contributes a fragment that Rhino ANDs into the **same** `where`, and scopes are written in isolation, so two that are each correct alone can behave unexpectedly together.
+
+```ts title="src/scopes/WithOpenAssignmentsScope.ts"
+export class WithOpenAssignmentsScope implements RhinoNamedScope {
+  apply(): Record<string, any> {
+    return { assignments: { some: { completedAt: null } } };
+  }
+}
+
+export class RecentlyAssignedScope implements RhinoNamedScope {
+  static params = ['since'];
+  apply(ctx: ScopeContext): Record<string, any> {
+    return { assignments: { some: { createdAt: { gte: new Date(String(ctx.args!.since)) } } } };
+  }
+}
+```
+
+Each one is right on its own. Asked for together:
+
+```bash title="terminal"
+GET /api/routes?scope[withOpenAssignments]=&scope[recentlyAssigned]=2026-01-01
+```
+
+the two `some` filters are satisfied by **different** assignments: a route with one old open assignment and one recent completed one matches, which is almost certainly not what the caller meant. Expressing both conditions on the same related row takes a single scope with one `some` clause.
+
+Write scopes that survive being combined:
+
+- **Keep each scope's conditions on one relation in one fragment.** Two `some` filters on the same relation are two independent existence checks, not one row that satisfies both.
+- **Do not assume a scope runs alone.** Its fragment is ANDed with the organization filter, the model's own scopes, `?filter[]` and `?search=`.
+- **Watch the cost.** Each nested relation filter is another subquery in the same statement; three of them over unindexed columns is three scans.
+
+The cap is `maxScopesPerRequest` on the root config:
+
+```ts title="src/rhino.config.ts"
+RhinoModule.forRoot({
+  maxScopesPerRequest: 3,
+  models: { /* ... */ },
+});
+```
+
+Three covers the shapes that come up in practice: a base scope, a window, and one more predicate. Raise it if your clients legitimately compose more. A value below 1 is ignored, so a typo cannot lock every scope out of every request.
 :::
 
 ### Restricting scopes per user

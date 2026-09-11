@@ -7,6 +7,25 @@ title: Release Notes
 
 Notable changes in each release of Rhino for Rails, newest first.
 
+## 4.8.1
+
+**The named-scope cap is configurable.** How many scopes one request may combine is now
+`config.max_scopes_per_request`, defaulting to the same 3 as before:
+
+```ruby title="config/initializers/rhino.rb"
+Rhino.configure do |config|
+  config.max_scopes_per_request = 3
+end
+```
+
+A value below 1 is ignored rather than locking every scope out of every request.
+
+The [Combining scopes](./querying#combining-scopes) docs now also explain what the cap is protecting
+you from, with a worked example: two scopes that each `joins` a relation are correct alone and wrong
+together, returning duplicate rows, inflating the pagination total and making `?sort=` ambiguous.
+Prefer relation predicates or `EXISTS` subqueries, keep ordering and limits out of scope bodies, and
+do not reach for `distinct` as a patch.
+
 ## 4.8.0
 
 **Named scopes take arguments.** A scope used to be a name and nothing else, so anything the client

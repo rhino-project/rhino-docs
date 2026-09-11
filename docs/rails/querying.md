@@ -240,7 +240,7 @@ end
 
 ### Combining scopes
 
-Up to three scopes may be combined, and they apply in the order the URL lists them:
+Several scopes may be combined — three by default, set by `max_scopes_per_request` — and they apply in the order the URL lists them:
 
 ```bash title="terminal"
 GET /api/routes?scope[archived]=&scope[window][from]=2026-01-01&scope[window][to]=2026-02-01
@@ -248,10 +248,42 @@ GET /api/routes?scope[archived]=&scope[window][from]=2026-01-01&scope[window][to
 
 The two forms cannot be mixed in one request, because they share the single `scope` query key. That is what the empty value on `archived` is for: it is how a no-argument scope joins a request that also carries one with arguments. On its own, `?scope=archived` is still the way to write it.
 
-Each scope is a fragment that narrows the set, so they compose like filters. Write scopes that are safe to combine: a scope that sets its own ordering, limit or raw join can fight another one.
+Each scope narrows the set, so they compose like filters — with one caveat worth reading before you rely on it.
 
-:::info Why three
-The limit is about blast radius, not about a number anyone hits. A named scope is an arbitrary query fragment, so each one may add joins or subqueries; stacking many of them is how you end up with an accidental cross join, or a query nobody can explain from reading the URL. Three covers the shapes that come up in practice — a base scope, a window, and one more predicate.
+:::warning Chained scopes share one SQL statement
+The cap is about blast radius, not about a number anyone hits. Every scope in a request adds its fragment to the **same** relation, and scopes are written in isolation, so two that are each correct alone can be wrong together.
+
+The usual way this bites is a `joins`:
+
+```ruby title="app/models/route.rb"
+scope :with_open_assignments, -> { joins(:assignments).where(assignments: { completed_at: nil }) }
+scope :in_region, ->(region_id) { joins(:region).where(regions: { id: region_id }) }
+```
+
+Each one returns the right routes on its own. Asked for together:
+
+```bash title="terminal"
+GET /api/routes?scope[withOpenAssignments]=&scope[inRegion]=4
+```
+
+a route with three open assignments comes back three times, the pagination total counts those duplicates, and `?sort=` is ambiguous because two tables now carry a `created_at`. Nothing errors; the numbers are just wrong.
+
+Write scopes that survive being combined:
+
+- **Prefer `where(<relation>: ...)` predicates or `EXISTS` subqueries over `joins`.** They narrow without multiplying rows, so any number of them compose.
+- **Do not set ordering or limits inside a scope.** `order` fights `?sort=`, and a `limit` truncates the set before the other scopes have narrowed it.
+- **Avoid `distinct` as a patch.** It hides duplicate rows but interacts badly with `?fields=` and makes the count query more expensive, not less.
+- **Watch the cost.** Three fragments is three more chances to scan a table that has no index for the column you filtered on.
+
+The cap is `max_scopes_per_request` in the initializer:
+
+```ruby title="config/initializers/rhino.rb"
+Rhino.configure do |config|
+  config.max_scopes_per_request = 3
+end
+```
+
+Three covers the shapes that come up in practice: a base scope, a window, and one more predicate. Raise it if your clients legitimately compose more. A value below 1 is ignored, so a typo cannot lock every scope out of every request.
 :::
 
 ### Restricting scopes per user

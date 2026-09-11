@@ -7,6 +7,24 @@ title: Release Notes
 
 Notable changes in each release of Rhino for Laravel, newest first.
 
+## 4.8.1
+
+**The named-scope cap is configurable.** How many scopes one request may combine is now
+`max_scopes_per_request` in `config/rhino.php`, defaulting to the same 3 as before:
+
+```php title="config/rhino.php"
+'max_scopes_per_request' => 3,
+```
+
+An app whose published config predates the key keeps the default, and a value below 1 is ignored
+rather than locking every scope out of every request.
+
+The [Combining scopes](./querying#combining-scopes) docs now also explain what the cap is protecting
+you from, with a worked example: two scopes that each `join` a relation are correct alone and wrong
+together, returning duplicate rows, inflating the pagination total and making `?sort=` ambiguous.
+Prefer `whereHas` / `whereExists`, keep ordering and limits out of scope bodies, and do not reach for
+`distinct` as a patch.
+
 ## 4.8.0
 
 **Named scopes take arguments.** A scope used to be a name and nothing else, so anything the client
