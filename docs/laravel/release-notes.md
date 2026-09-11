@@ -7,6 +7,26 @@ title: Release Notes
 
 Notable changes in each release of Rhino for Laravel, newest first.
 
+## 4.8.2
+
+**Fixes a fatal when `$allowedSorts` holds Spatie objects.** A model may declare its sorts as
+`AllowedSort::field(...)` rather than plain strings. The 4.8.0 attribute gate cast every entry to a
+string to read its name, and casting an `AllowedSort` throws
+`Object of class Spatie\QueryBuilder\AllowedSort could not be converted to string`. Filters were
+already handled; sorts now are too, through the same path.
+
+**A renamed filter or sort no longer walks around the policy.**
+`AllowedSort::field('cost', 'salary')` is asked for as `?sort=cost` but orders by `salary`. The gate
+now checks the attribute an entry actually reads, not the name the URL carries, so hiding `salary`
+covers every label pointing at it.
+
+**A name that is not a column is no longer refused by a whitelist policy.** A callback filter
+(`AllowedFilter::callback('q', ...)`) or a renamed entry's label is not an attribute, so
+`permittedAttributesForShow()` has no opinion about it. Such a name now passes, while a name listed
+in `hiddenAttributesForShow()` is still refused and a real column outside the whitelist still is too.
+Apps that restrict attributes with a whitelist **and** use callback or renamed filters were getting
+403 on those since 4.8.0.
+
 ## 4.8.1
 
 **The named-scope cap is configurable.** How many scopes one request may combine is now

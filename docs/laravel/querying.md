@@ -61,6 +61,15 @@ Two related rules:
 
 The model's declared `$defaultSort` is the server's own choice, so it applies regardless.
 
+:::info Spatie objects in the allowlists
+`$allowedFilters` and `$allowedSorts` may hold `AllowedFilter` / `AllowedSort` objects instead of
+plain strings. The gate reads the attribute the entry actually queries, so
+`AllowedSort::field('cost', 'salary')` is refused exactly when `salary` is hidden, whatever the URL
+calls it. A name that is not a column of the model — a callback filter's label, for instance — is not
+an attribute, so a whitelist policy does not refuse it; naming it in `hiddenAttributesForShow()`
+still does.
+:::
+
 ## Filtering
 
 Filter records by field values:
