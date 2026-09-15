@@ -248,6 +248,8 @@ The value `true` or `false` reaches the scope as a real boolean, so a check insi
 
 A scope that declares no parameters never receives client input. Sending any is a `403`, which means a scope written without arguments can never be handed some later by a URL.
 
+[Computed attributes take parameters the same way](./computed-attributes#attributes-with-parameters) — the same bracket forms, the same binding by name, the same `ctx.args` object, and the same 403 wording — so an aggregate over a date window is a declaration rather than a filter.
+
 :::info Bracket syntax needs the extended query parser
 `?scope[window][from]=a` and `?filter[status]=draft` both rely on Express parsing bracket syntax into a nested object. Express 4, which `@nestjs/platform-express` 10 ships, does that by default. If your app runs the **simple** query parser (Express 5's default), turn the extended one back on so these parameters arrive as objects rather than as literal key names:
 

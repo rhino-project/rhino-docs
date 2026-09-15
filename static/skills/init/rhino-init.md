@@ -446,7 +446,7 @@ Request
 | NestJS | `@rhino-dev/rhino-nestjs` | `npm install @rhino-dev/rhino-nestjs@^4.0` |
 | React | `@rhino-dev/rhino-react` | `npm install @rhino-dev/rhino-react@^4.0` |
 
-### Feature Summary (29 features)
+### Feature Summary (30 features)
 
 | # | Feature | Description |
 |---|---------|-------------|
@@ -480,6 +480,7 @@ Request
 | 27 | **Postman Export** | Auto-generated Postman Collection v2.1 |
 | 28 | **Blueprint** | YAML to policies, tests, seeders. Deterministic, zero AI tokens |
 | 29 | **Configurable Route Key** | Member routes match `{id}` against a chosen unique column instead of the PK (Laravel `$routeKey`, Rails `rhino_route_key`, NestJS `routeKey`; per-model or global config). FKs, nested ops, and audit ids stay PK-based |
+| 30 | **Computed Attributes** | Derived values without a controller. Always-on per record (`rhinoComputedAttributes()`), opt-in per record via `?computed_attributes=name` (`rhinoRecordComputedAttributes()`), and collection aggregates via `GET /{resource}/computed?attributes=name` (`rhinoCollectionComputedAttributes()`, static). Either opt-in kind may declare parameters — `'revenue' => ['params' => ['from','to'], 'using' => fn ($query, $user, $from, $to) => …]` — selected as `?attributes[revenue][from]=a&attributes[revenue][to]=b`. Org-scoped and policy-filtered for free. **Never hand-write a controller for a count or a dashboard stat** |
 
 ### API URL Pattern
 

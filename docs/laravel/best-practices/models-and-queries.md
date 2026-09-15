@@ -514,6 +514,73 @@ GET /api/acme-corp/tickets/computed?attributes=open_tickets_count&scope=assigned
 
 Computed attributes are governed by the **same** `permittedAttributesForShow()` / `hiddenAttributesForShow()` gate as columns, so a role that cannot see `internal_notes` can equally be denied `internal_escalation_count` — with no extra code. A hand-written controller gets none of that for free.
 
+### Varying an aggregate — one attribute with parameters, not a family of them
+
+**Principle: when only a value changes, declare a parameter — not another attribute.** A dashboard that wants last month's revenue, last quarter's, and the year's is one aggregate asked three ways. Declaring it three times triples the code that has to stay correct, and the fourth window someone asks for next week means another deploy.
+
+```php title="app/Models/Ticket.php"
+// ❌ Bad — one attribute per window. Every new window is a code change, and
+//          the three bodies drift apart the first time one gets a bug fix.
+public static function rhinoCollectionComputedAttributes(): array
+{
+    return [
+        'revenue_last_30_days' => fn ($query, $user) => $query->where('created_at', '>=', now()->subDays(30))->sum('total'),
+        'revenue_last_90_days' => fn ($query, $user) => $query->where('created_at', '>=', now()->subDays(90))->sum('total'),
+        'revenue_ytd' => fn ($query, $user) => $query->where('created_at', '>=', now()->startOfYear())->sum('total'),
+    ];
+}
+```
+
+```php title="app/Models/Ticket.php"
+// ✅ Good — one declaration, any window. The client names the dates; the
+//           server still owns the query, the org scope and the policy gate.
+public static function rhinoCollectionComputedAttributes(): array
+{
+    return [
+        'revenue' => [
+            'params' => ['from', 'to'],
+            'using'  => fn ($query, $user, $from, $to) => $query
+                ->whereBetween('created_at', [$from, $to])
+                ->sum('total'),
+        ],
+    ];
+}
+```
+
+```bash title="terminal"
+curl -g '/api/acme-corp/tickets/computed?attributes[revenue][from]=2026-01-01&attributes[revenue][to]=2026-02-01'
+# → { "data": { "revenue": 48210.5 } }
+```
+
+The parameter values are **client input**. They are safe precisely because they are used as bound values in a predicate and nothing else — which is the one rule that makes this pattern different from writing the endpoint by hand:
+
+```php title="app/Models/Ticket.php"
+// ❌ Bad — the argument picks the column. The client now chooses what the query
+//          reads, walking straight past the policy's attribute whitelist: a role
+//          that cannot see `internal_cost` can now sum it.
+'total' => [
+    'params' => ['column'],
+    'using'  => fn ($query, $user, $column) => $query->sum($column),
+],
+
+// ❌ Bad — the argument reaches SQL as text. This is an injection point, in a
+//          declaration that looks declarative and safe.
+'revenue' => [
+    'params' => ['from'],
+    'using'  => fn ($query, $user, $from) => $query->whereRaw("created_at >= '{$from}'")->sum('total'),
+],
+
+// ✅ Good — the argument is a bound value in a predicate, and nothing else
+'revenue' => [
+    'params' => ['from', 'to'],
+    'using'  => fn ($query, $user, $from, $to) => $query->whereBetween('created_at', [$from, $to])->sum('total'),
+],
+```
+
+A parameter that must name a column or a period is an **enum, validated against a fixed list inside the callable** — never the raw string handed to the query builder.
+
+Arguments arrive **after** the organization scope, `?scope=`, `?filter[]=` and `?search=` have narrowed the query, so a bound predicate can only narrow further. Interpolated SQL or a client-chosen column steps outside that guarantee — and it is the one way a computed attribute can leak what a hand-written controller would have leaked. Full reference: [Computed Attributes — attributes with parameters](../computed-attributes#attributes-with-parameters).
+
 :::tip When a controller IS the right answer
 Cross-model reports, non-CRUD workflows, and anything whose shape isn't "attributes of one resource" still belong in a controller — but route the query through Rhino's scoped resolver so tenancy and policies still apply. See [Custom Controllers](../custom-controllers).
 :::

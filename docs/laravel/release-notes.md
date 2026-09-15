@@ -7,6 +7,78 @@ title: Release Notes
 
 Notable changes in each release of Rhino for Laravel, newest first.
 
+## 4.9.0
+
+**Computed attributes take arguments, the same way scopes do.** A computed attribute used to be a
+name and nothing else, so anything the client needed to vary had to be baked into its own attribute —
+`revenue_last_30_days`, `revenue_last_90_days`, `revenue_ytd` — or pushed out to the client as a
+filter over a column you then had to expose. An attribute can now declare parameters the client fills
+in:
+
+```php title="app/Models/User.php"
+public static function rhinoCollectionComputedAttributes(): array
+{
+    return [
+        'active_users_count' => fn ($query, $user) => $query->where('status', 'active')->count(),
+        'revenue' => [
+            'params' => ['from', 'to'],
+            'using'  => fn ($query, $user, $from, $to) => $query
+                ->whereBetween('created_at', [$from, $to])
+                ->sum('total'),
+        ],
+    ];
+}
+```
+
+```bash title="terminal"
+curl -g '/api/users/computed?attributes[revenue][from]=2026-01-01&attributes[revenue][to]=2026-02-01'
+```
+
+```json
+{ "data": { "revenue": 48210.5 } }
+```
+
+The same three bracket forms work on `?computed_attributes=` for per-record attributes on `index`,
+`show` and `trashed`, where a record callable receives them as `fn ($record, $user, $since, $status)`.
+
+- Arguments bind **by name** and reach the callable in declared order, after the user. A bare value
+  binds to the single declared parameter; a positional list is refused; `"true"` / `"false"` arrive as
+  real booleans.
+- An omitted trailing optional parameter is not passed at all, so the callable's own default applies —
+  which means every name listed in `optional` must have a PHP default in the closure signature. Without
+  one, an all-optional attribute requested with no arguments throws `ArgumentCountError`.
+- The declared check and the policy check run **before** any argument is bound, so an undeclared name
+  and a policy-denied one keep returning the same `Computed attribute 'x' is not allowed`, and the
+  messages that do name a parameter are only reachable for an attribute the caller may already use.
+- Argument mistakes are `403`: `requires parameter 'to'`, `does not accept parameter 'nope'`,
+  `requires named parameters`, `does not accept arguments`. A structurally impossible selection —
+  `?attributes[]=x` — is `Computed attributes are not allowed`.
+- A bare `GET /{resource}/computed` returns every policy-allowed attribute **minus** any that declares
+  a required parameter; those are skipped silently rather than erroring, so adding one never breaks a
+  client asking for everything. All-optional attributes are still evaluated.
+- The Postman export emits the bracket form for parameterised attributes, and leaves them out of the
+  combined multi-attribute request, which would otherwise ship a guaranteed 403.
+
+Two things differ from named scopes on purpose, and they are the two a reader who knows that feature
+will guess wrong about. There is **no shorthand declaration form** — only an array carrying `params`,
+`optional` or `using` is a spec, because a bare list is already a valid *literal* declaration and
+reinterpreting it would silently change what a shipped model returns. And there is **no per-request
+cap**: arguments change what each attribute computes, never how many rows the request touches.
+
+**The React client** ships the matching form in `@rhino-dev/rhino-react` 4.6.0. `computedAttributes`
+and `useModelComputedAttributes`'s `attributes` now accept an object as well as an array —
+`{ revenue: { from, to }, activeUsersCount: null }` — serialized to the bracket URL. `ScopeSelection`
+is also now genuinely exported from the package entry point; 4.5.0 documented it but only exported it
+from the types module.
+
+Everything that worked before works unchanged: `?attributes=a,b` and `?computed_attributes=a,b` parse
+exactly as they did, a declaration that is not a spec array keeps its existing meaning, `asRhinoJson()`
+gained an optional third argument rather than changing the first two, and every scope error string is
+byte-identical — scopes and computed attributes now share one argument binder, with the noun injected.
+
+No upgrade step. This adds no route, so `routes/api.php` is untouched and needs no re-publish; a
+dependency bump is sufficient.
+
 ## 4.8.2
 
 **Fixes a fatal when `$allowedSorts` holds Spatie objects.** A model may declare its sorts as

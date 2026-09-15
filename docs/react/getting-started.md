@@ -137,7 +137,7 @@ parameters. Full reference: [Querying](./querying).
 | `includes` | `?include=` |
 | `fields` | `?fields[model]=` |
 | `scope` | `?scope=` — a server-whitelisted named scope; an unknown name is a **403** |
-| `computedAttributes` | `?computed_attributes=` — opt-in per-record derived values |
+| `computedAttributes` | `?computed_attributes=` — opt-in per-record derived values; an object selects attributes that declare parameters |
 | `page` / `perPage` | `?page=` / `?per_page=` |
 
 ### 3. Response shape

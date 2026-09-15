@@ -22,7 +22,7 @@ interface ModelQueryOptions {
   fields?: string[];
   search?: string;
   scope?: string | ScopeSelection;
-  computedAttributes?: string[];
+  computedAttributes?: string[] | ComputedAttributeSelection;
   page?: number;
   perPage?: number;
 }
@@ -598,6 +598,47 @@ Works on `useModelIndex`, `useModelShow` and `useModelTrashed`. Serialized as `?
 
 Requesting an attribute the model doesn't declare — or that your role isn't allowed to read — returns **403**, so a typo surfaces immediately rather than silently returning nothing.
 
+#### Attributes with arguments
+
+An attribute can declare parameters the server fills in from the client. Pass an object instead of an array: the key is the attribute, and the value is its argument.
+
+```tsx
+// One declared parameter: a bare value
+useModelIndex('users', { computedAttributes: { ticketsSince: '2026-01-01' } });
+// GET /api/users?computed_attributes[ticketsSince]=2026-01-01
+
+// Several: an object of parameter name to value
+useModelIndex('users', { computedAttributes: { revenue: { from: '2026-01-01', to: '2026-02-01' } } });
+// GET /api/users?computed_attributes[revenue][from]=2026-01-01&computed_attributes[revenue][to]=2026-02-01
+
+// An attribute that takes no arguments, written in the object form
+useModelIndex('users', { computedAttributes: { avatar_url: null } });
+// GET /api/users?computed_attributes[avatar_url]=
+```
+
+The forms may be combined freely within one object, and they apply in key order:
+
+```tsx
+useModelIndex('users', {
+  computedAttributes: {
+    avatar_url: null,
+    ticketsSince: '2026-01-01',
+    revenue: { from: '2026-01-01', to: '2026-02-01' },
+  },
+});
+```
+
+Use the object form for every attribute in a request that needs arguments: the array form and the object form cannot be mixed, because they share the one `computed_attributes` query key. A plain `computedAttributes: ['avatar_url']` is still the way to select attributes that take none.
+
+Booleans serialize as `true` / `false` and reach the server as real booleans, so a flag parameter behaves the way you would expect. Arguments the server did not declare, a missing required one, or a bare value for an attribute with several parameters all return **403** with a message naming the parameter.
+
+```tsx title="ComputedAttributeSelection"
+type ComputedAttributeSelection = Record<
+  string,
+  string | number | boolean | null | Record<string, string | number | boolean>
+>;
+```
+
 ### Collection aggregates — `useModelComputedAttributes`
 
 For counts, sums and averages over the **whole collection**, use the dedicated hook. Each attribute is evaluated **once per request** on the server rather than once per row, which is what makes it cheap:
@@ -621,7 +662,20 @@ function UserStats() {
 }
 ```
 
-The hook returns the attribute object itself — `{ active_users_count: 128, blocked_users_count: 4 }`. Omit `attributes` to fetch every attribute your role is allowed to read.
+The hook returns the attribute object itself — `{ active_users_count: 128, blocked_users_count: 4 }`. Omit `attributes` to fetch every attribute your role is allowed to read, minus any that declares a required parameter — those are skipped rather than erroring, so adding one server-side never breaks a client that asks for everything.
+
+`attributes` takes the same object form as `computedAttributes`, for aggregates that declare parameters:
+
+```tsx
+const { data: stats } = useModelComputedAttributes('users', {
+  attributes: {
+    revenue: { from: '2026-01-01', to: '2026-02-01' },
+    activeUsersCount: null,
+  },
+});
+// GET /api/users/computed?attributes[revenue][from]=2026-01-01
+//     &attributes[revenue][to]=2026-02-01&attributes[activeUsersCount]=
+```
 
 `filters`, `search` and `scope` narrow the set the aggregates describe, exactly as they narrow `useModelIndex`. Pass the same values to both hooks and the numbers describe the list the user is actually looking at:
 
@@ -646,12 +700,14 @@ function FilteredUsers({ teamId, term }) {
 
 ```tsx title="ComputedAttributesOptions"
 interface ComputedAttributesOptions {
-  attributes?: string[];
+  attributes?: string[] | ComputedAttributeSelection;
   filters?: Record<string, any>;
   search?: string;
   scope?: string;
 }
 ```
+
+`ComputedAttributeSelection` and `ScopeSelection` are both exported from the package entry point, so you can type a selection you build up in state.
 
 :::tip Don't compute counts per row
 If you find yourself declaring a count as a per-record computed attribute, move it to a collection attribute — the server would otherwise run the same query once for every row on the page.

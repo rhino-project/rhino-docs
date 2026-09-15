@@ -7,6 +7,85 @@ title: Release Notes
 
 Notable changes in each release of Rhino for NestJS, newest first.
 
+## 4.9.0
+
+**Computed attributes take arguments, the same way scopes do.** A computed attribute used to be a
+name and nothing else, so anything the client needed to vary had to be baked into its own attribute --
+`revenueLast30Days`, `revenueLast90Days`, `revenueYtd` -- or pushed out to the client as a filter over
+a field you then had to expose. An attribute can now declare parameters, and read the bound values as
+a named object:
+
+```ts title="src/rhino.config.ts"
+collectionComputedAttributes: {
+  activeUsersCount: (ctx) => ctx.delegate.count({ where: { ...ctx.where, status: 'active' } }),
+  revenue: {
+    params: ['from', 'to'],
+    using: (ctx) => ctx.delegate.aggregate({
+      where: { ...ctx.where, createdAt: { gte: ctx.args!.from, lte: ctx.args!.to } },
+      _sum: { total: true },
+    }),
+  },
+},
+```
+
+```bash title="terminal"
+curl -g '/api/users/computed?attributes[revenue][from]=2026-01-01&attributes[revenue][to]=2026-02-01'
+```
+
+```json
+{ "data": { "revenue": 48210.5 } }
+```
+
+The same three bracket forms work on `?computed_attributes=` (and its `?computedAttributes=` alias)
+for per-record attributes on `index`, `show` and `trashed`. A record callable receives the arguments
+as a third positional parameter, `(record, user, args)`; a collection callable reads `ctx.args`, the
+same place a named scope reads them.
+
+- Arguments bind **by name** into an object keyed by declared parameter name. A bare value binds to
+  the single declared parameter; a positional list is refused; `"true"` / `"false"` arrive as real
+  booleans.
+- An optional parameter the client omitted is simply **absent** from the object -- check it with
+  `=== undefined`. A callable that declares no parameters still receives `{}`, so existing entries are
+  unaffected.
+- Record callables remain **synchronous**. Declaring parameters does not change that: a parameterised
+  per-row attribute still must not be `async`. Collection callables are awaited, as before.
+- The declared check and the policy check run **before** any argument is bound, so an undeclared name
+  and a policy-denied one keep returning the same `Computed attribute 'x' is not allowed`. Attribute
+  and parameter names are both looked up as own properties, so a prototype member is never invoked:
+  `attributes[constructor]=` is refused as undeclared, while `attributes[__proto__]=` is stripped by
+  Express's query parser and simply yields an empty selection, `200 {"data": {}}`. Laravel and Rails
+  keep that key and answer `403` -- a parser difference, not a behavioral one.
+- Argument mistakes are `403`: `requires parameter 'to'`, `does not accept parameter 'nope'`,
+  `requires named parameters`, `does not accept arguments`. A structurally impossible selection --
+  `?attributes[]=x`, or the same key repeated -- is `Computed attributes are not allowed`.
+- A bare `GET /{resource}/computed` returns every policy-allowed attribute **minus** any that declares
+  a required parameter; those are skipped silently rather than erroring.
+- The Postman export emits the bracket form for parameterised attributes, and leaves them out of the
+  combined multi-attribute request, which would otherwise ship a guaranteed 403.
+
+`RecordComputedAttributeSpec` and `CollectionComputedAttributeSpec` are exported alongside the other
+config interfaces. Note that both registration maps stay loosely typed so legacy literal declarations
+keep type-checking -- which means a misspelled spec key such as `optionalParam` will **not** be caught
+by the compiler, and the parameter stays required at runtime.
+
+Two things differ from named scopes on purpose: there is **no shorthand declaration form** -- only an
+object carrying `params`, `optionalParams` or `using` is a spec, because a bare array is already a
+valid *literal* declaration -- and there is **no per-request cap**.
+
+**The React client** ships the matching form in `@rhino-dev/rhino-react` 4.6.0. `computedAttributes`
+and `useModelComputedAttributes`'s `attributes` now accept an object as well as an array --
+`{ revenue: { from, to }, activeUsersCount: null }` -- serialized to the bracket URL. `ScopeSelection`
+is also now genuinely exported from the package entry point; 4.5.0 documented it but only exported it
+from the types module.
+
+Everything that worked before works unchanged: `?attributes=a,b` and `?computed_attributes=a,b` parse
+exactly as they did, a declaration that is not a spec object keeps its existing meaning, the serializer
+context gained a separate `computedAttributeArgs` channel rather than changing the meaning of
+`computedAttributes`, and every scope error string is byte-identical -- scopes and computed attributes
+now share one argument binder, with the noun injected.
+
+No upgrade step beyond the dependency bump; routes are registered from inside the library.
+
 ## 4.8.1
 
 **The named-scope cap is configurable.** How many scopes one request may combine is now the root

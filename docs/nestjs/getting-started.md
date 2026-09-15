@@ -346,7 +346,7 @@ All of these compose in a single request. Full reference: [Querying](./querying)
 | `?fields[model]=` | `?fields[posts]=id,title` | Ignored |
 | `?page=` / `?per_page=` | `?page=2&per_page=25` | — |
 | `?scope=` | `?scope=availableForDrivers`, `?scope[window][from]=a&scope[window][to]=b` | **403** if not whitelisted, not permitted by the policy, or the arguments do not match the declared parameters |
-| `?computed_attributes=` | `?computed_attributes=avatarUrl` (`?computedAttributes=` is an alias) | **403** if undeclared or denied |
+| `?computed_attributes=` | `?computed_attributes=avatarUrl` (`?computedAttributes=` is an alias), `?computed_attributes[ticketsSince][since]=a` | **403** if undeclared, denied, or the arguments do not match the declared parameters |
 
 Pagination metadata comes back in **headers**: `X-Current-Page`, `X-Last-Page`, `X-Per-Page`,
 `X-Total`.
@@ -428,6 +428,27 @@ Three kinds, chosen by cost — none of them needs a controller
 
 All three pass through the same policy gate as database columns. Per-record entries are **not awaited** —
 keep them to in-memory work and put anything that hits Prisma in a collection-level attribute.
+
+Either opt-in kind can declare **parameters** the client fills in, so one `revenue` replaces a family
+of fixed-window attributes. The bound values arrive as a named object — `ctx.args` for a collection
+attribute, a third `args` parameter for a record one:
+
+```ts
+revenue: {
+  params: ['from', 'to'],
+  using: (ctx) => ctx.delegate.aggregate({
+    where: { ...ctx.where, createdAt: { gte: ctx.args!.from, lte: ctx.args!.to } },
+    _sum: { total: true },
+  }),
+},
+```
+
+```bash
+GET /api/users/computed?attributes[revenue][from]=2026-01-01&attributes[revenue][to]=2026-02-01
+```
+
+Arguments bind by name, `"true"`/`"false"` arrive as real booleans, and a mismatch is a `403`. A bare
+`GET /{resource}/computed` skips attributes with a required parameter rather than erroring.
 
 ### 10. Custom controllers
 

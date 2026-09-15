@@ -290,7 +290,7 @@ All of these compose in a single request. Full reference: [Querying](./querying)
 | `?fields[model]=` | `?fields[posts]=id,title` | Ignored |
 | `?page=` / `?per_page=` | `?page=2&per_page=25` | — |
 | `?scope=` | `?scope=availableForDrivers` (camelCase on the wire), `?scope[window][from]=a&scope[window][to]=b` | **403** if not whitelisted, not permitted by the policy, or the arguments do not match the declared parameters |
-| `?computed_attributes=` | `?computed_attributes=avatar_url` | **403** if undeclared or denied |
+| `?computed_attributes=` | `?computed_attributes=avatar_url`, `?computed_attributes[tickets_since][since]=a` | **403** if undeclared, denied, or the arguments do not match the declared parameters |
 
 Pagination metadata comes back in **headers**: `X-Current-Page`, `X-Last-Page`, `X-Per-Page`,
 `X-Total`.
@@ -374,6 +374,24 @@ Three kinds, chosen by cost — none of them needs a controller
 
 All three pass through the same policy gate as database columns. Never override `as_rhino_json` —
 doing so appends values *after* policy filtering.
+
+Either opt-in kind can declare **parameters** the client fills in, so one `revenue` replaces a family
+of fixed-window attributes:
+
+```ruby
+"revenue" => {
+  params: %i[from to],
+  with: ->(scope, _user, from, to) { scope.where(created_at: from..to).sum(:total) }
+}
+```
+
+```bash
+GET /api/users/computed?attributes[revenue][from]=2026-01-01&attributes[revenue][to]=2026-02-01
+```
+
+Arguments bind by name — matched **verbatim**, unlike scope parameters — `"true"`/`"false"` arrive as
+real booleans, and a mismatch is a `403`. A bare `GET /{resource}/computed` skips attributes with a
+required parameter rather than erroring.
 
 ### 11. Custom controllers
 

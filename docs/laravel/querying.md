@@ -232,6 +232,8 @@ The value `true` or `false` reaches the scope as a real boolean, so a check insi
 
 A scope that declares no parameters never receives client input. Sending any is a `403`, which means a scope written without arguments can never be handed some later by a URL.
 
+[Computed attributes take parameters the same way](./computed-attributes#attributes-with-parameters) — the same bracket forms, the same binding by name, and the same 403 wording — so an aggregate over a date window is a declaration rather than a filter.
+
 ### Combining scopes
 
 Several scopes may be combined — three by default, set by `max_scopes_per_request` — and they apply in the order the URL lists them:

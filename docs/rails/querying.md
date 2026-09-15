@@ -238,6 +238,8 @@ class WindowScope < Rhino::ResourceScope
 end
 ```
 
+[Computed attributes take parameters the same way](./computed-attributes#attributes-with-parameters) — the same bracket forms, the same binding by name, and the same 403 wording — so an aggregate over a date window is a declaration rather than a filter. One difference worth knowing: computed-attribute parameter names are matched **verbatim**, not underscored.
+
 ### Combining scopes
 
 Several scopes may be combined — three by default, set by `max_scopes_per_request` — and they apply in the order the URL lists them:

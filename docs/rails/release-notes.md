@@ -7,6 +7,86 @@ title: Release Notes
 
 Notable changes in each release of Rhino for Rails, newest first.
 
+## 4.9.0
+
+**Computed attributes take arguments, the same way scopes do.** A computed attribute used to be a
+name and nothing else, so anything the client needed to vary had to be baked into its own attribute —
+`revenue_last_30_days`, `revenue_last_90_days`, `revenue_ytd` — or pushed out to the client as a
+filter over a column you then had to expose. An attribute can now declare parameters the client fills
+in, with `with:` carrying the lambda:
+
+```ruby title="app/models/user.rb"
+def self.rhino_collection_computed_attributes
+  {
+    "active_users_count" => ->(scope, _user) { scope.where(status: "active").count },
+    "revenue" => {
+      params: %i[from to],
+      with: ->(scope, _user, from, to) { scope.where(created_at: from..to).sum(:total) }
+    }
+  }
+end
+```
+
+```bash title="terminal"
+curl -g '/api/users/computed?attributes[revenue][from]=2026-01-01&attributes[revenue][to]=2026-02-01'
+```
+
+```json
+{ "data": { "revenue": 48210.5 } }
+```
+
+The same three bracket forms work on `?computed_attributes=` for per-record attributes on `index`,
+`show` and `trashed`, where a record lambda receives them as `->(record, user, since, status)`.
+
+- Arguments bind **by name** and reach the lambda in declared order, after the user. A bare value binds
+  to the single declared parameter; a positional list is refused; `"true"` / `"false"` arrive as real
+  booleans.
+- Parameter names are matched **verbatim** — unlike scope parameters, they are not underscored on the
+  way in.
+- An entry that declares any parameter is invoked strictly as `entry.call(scope, user, *args)`. Give
+  optional parameters a Ruby default in the lambda; an entry that declares none keeps the tolerant
+  arity-0/1/2 handling it has always had.
+- The declared check and the policy check run **before** any argument is bound, so an undeclared name
+  and a policy-denied one keep returning the same `Computed attribute 'x' is not allowed`.
+- Argument mistakes are `403`: `requires parameter 'to'`, `does not accept parameter 'nope'`,
+  `requires named parameters`, `does not accept arguments`. A structurally impossible selection —
+  `?attributes[]=x` — is `Computed attributes are not allowed`. Mixing the comma list and the bracket
+  form on one key is refused by Rack as a `400` before Rhino sees it.
+- A bare `GET /{resource}/computed` returns every policy-allowed attribute **minus** any that declares
+  a required parameter; those are skipped silently rather than erroring.
+- The Postman export emits the bracket form for parameterised attributes, and leaves them out of the
+  combined multi-attribute request, which would otherwise ship a guaranteed 403.
+
+Two things differ from named scopes on purpose: there is **no shorthand declaration form** — only a
+hash carrying `params`, `optional` or `with` is a spec, because a bare array is already a valid
+*literal* declaration — and there is **no per-request cap**.
+
+**Symbol-keyed record declarations now serialize — a behavior change worth checking.**
+`{ full_name: ->(record, _user) { … } }` passed the 403 gate, which stringified names, but the
+serializer then compared that stringified name against the model's raw symbol keys and found nothing —
+so the attribute was silently dropped from the JSON, with a 200 and no error anywhere. Both sides now
+normalize identically, which means a response to `?computed_attributes=full_name` that used to come
+back **without** `full_name` now carries it. If a client had come to rely on that absence, or if the
+lambda was never exercised in production and turns out to raise, this is where you will see it.
+
+**An all-optional scope gets its own defaults back.** The scope binder dropped trailing `nil`s with
+`args.any?`, which is false for `[nil]` — so a scope whose parameters were all optional, called with
+none, received `[nil]` instead of `[]` and never reached its lambda's own default. Mixed cases were
+always fine, which is why it went unnoticed. It now matches Laravel and NestJS.
+
+**The React client** ships the matching form in `@rhino-dev/rhino-react` 4.6.0. `computedAttributes`
+and `useModelComputedAttributes`'s `attributes` now accept an object as well as an array —
+`{ revenue: { from, to }, activeUsersCount: null }` — serialized to the bracket URL. `ScopeSelection`
+is also now genuinely exported from the package entry point; 4.5.0 documented it but only exported it
+from the types module.
+
+Everything that worked before works unchanged: `?attributes=a,b` and `?computed_attributes=a,b` parse
+exactly as they did, a declaration that is not a spec hash keeps its existing meaning, `as_rhino_json`
+gained an optional keyword rather than changing the existing one, and every scope error string is
+byte-identical — scopes and computed attributes now share one argument binder, with the noun injected.
+
+No upgrade step beyond the dependency bump; routes are registered from inside the library.
+
 ## 4.8.1
 
 **The named-scope cap is configurable.** How many scopes one request may combine is now
