@@ -39,7 +39,7 @@ The Helpdesk `tenant` group has two tenant-owned models, and they're isolated **
 `Ticket` carries `organization_id` directly. Scoping is a plain `where organization_id = …`, applied automatically by `BelongsToOrganization`.
 
 ```php title="app/Models/Ticket.php"
-use Rhino\LaravelApi\Traits\BelongsToOrganization;
+use Rhino\Traits\BelongsToOrganization;
 
 class Ticket extends Model
 {
@@ -55,7 +55,7 @@ class Ticket extends Model
 `TicketComment` has **no** `organization_id` column. It's tenant-owned only because it belongs to a `Ticket`, which belongs to an `Organization`. Rhino **auto-detects** this by introspecting the `belongsTo` chain — no configuration needed. Scoping becomes a `whereHas('ticket', …)` under the hood.
 
 ```php title="app/Models/TicketComment.php"
-use Rhino\LaravelApi\Traits\BelongsToOrganization;
+use Rhino\Traits\BelongsToOrganization;
 
 class TicketComment extends Model
 {

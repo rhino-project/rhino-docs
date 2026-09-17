@@ -7,6 +7,116 @@ title: Release Notes
 
 Notable changes in each release of Rhino for Laravel, newest first.
 
+## 4.10.0
+
+**Validation moves off the model and into a request class that can see the whole request.** Model-level
+`$validationRules` could only ever express static format constraints: the rules had no access to the
+current user, the organization, the route group or the record being updated, so anything conditional
+had to be smuggled into a role-keyed map or pushed into a policy. A model may now declare
+`{Model}StoreRequest` and `{Model}UpdateRequest`, each owning the entire shape contract for one
+action.
+
+```php title="app/Http/Requests/PostStoreRequest.php"
+namespace App\Http\Requests;
+
+use Rhino\Http\Requests\ResourceRequest;
+
+class PostStoreRequest extends ResourceRequest
+{
+    public function authorize(): bool
+    {
+        return $this->routeGroup() !== 'public';
+    }
+
+    public function prepare(array $input): array
+    {
+        $input['title'] = trim($input['title'] ?? '');
+
+        return $input;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'title'       => 'required|string|max:255',
+            'status'      => $this->user()?->getRoleSlugForValidation($this->organization()) === 'admin'
+                ? 'required|string'
+                : 'required|string|in:draft',
+            'category_id' => 'required|integer|exists:categories,id',
+        ];
+    }
+}
+```
+
+```bash title="terminal"
+curl -X POST '/api/acme/posts' -d '{"title":"","status":"published","category_id":4}'
+```
+
+```json
+{ "errors": { "title": ["The title field is required."], "status": ["The selected status is invalid."] } }
+```
+
+- **Discovery is per action.** `rhino.requests.map.{slug}.{store|update}` wins, then the convention
+  `{Model}StoreRequest` / `{Model}UpdateRequest` in `rhino.requests.namespace` (default
+  `App\Http\Requests`), then the model-level rules. A model may declare only a store class.
+- **Context is reached through helpers** — `$this->user()`, `$this->organization()`,
+  `$this->routeGroup()`, `$this->action()`, `$this->record()`. `rules()` and `authorize()` keep their
+  native zero-argument signatures, because Laravel invokes them through the container.
+- **`prepare()` runs after the policy's forbidden-field check and before `authorize()`**, so it can
+  never launder a denied field past the policy, and `authorize()` always sees normalized input.
+- **`authorize()` returning false is a `403` byte-identical to a policy denial.** The refusal is raised
+  as a fresh `Illuminate\Auth\Access\AuthorizationException` with the default message and rendered by
+  the app's exception handler, exactly like a denial from `Gate::authorize()` — so the default handler
+  answers `{"message":"This action is unauthorized."}`, and an app that customises access-denial
+  rendering gets its own body for both cases identically. A message a developer throws inside
+  `authorize()` is never surfaced. (Laravel converts `AuthorizationException` to
+  `AccessDeniedHttpException` before renderables run, so a custom renderable must hook the latter.)
+- **`validated()` is the write payload.** A field with no rule is dropped, not persisted, including a
+  field `prepare()` added. Rhino does **not** intersect the rules with
+  `permittedAttributesForCreate/Update`, and does **not** relax an update's rules to the keys the
+  client sent — an `UpdateRequest` declares `sometimes` itself.
+- **`exists:` rules are still scoped to the organization**, including through a walked FK chain for
+  indirectly-owned models, and `organization_id` is still removed from the ruleset in tenant context.
+  The scoping moved to `Rhino\Support\TenantExistsRules` and is shared by both paths.
+- **Nested operations use the same classes**, per operation. `$N.field` references are stripped before
+  validation and merged back into the write payload, so a request class never sees a placeholder.
+- **A plain `FormRequest` subclass is accepted**, with identical `422` / `403` envelopes — but without
+  the context helpers, without `prepare()`, and **without `exists:` org-scoping**.
+- **A misconfigured explicit map entry throws.** A class named in `rhino.requests.map` that does not
+  exist, or is not a `FormRequest`, raises `RuntimeException`; a silently ignored validation class is a
+  security hole. A *convention* name that is not a `FormRequest` is logged and ignored instead.
+- **`php artisan rhino:generate` gained a fourth menu entry, `request`**, which asks for store, update
+  or both and writes a fully commented stub.
+- **Known limitation: the Postman export does not read request classes.**
+  `rhino:export-postman` builds example bodies from `$validationRules`, which cannot be introspected
+  from a request class without a live request. A model that moved to request classes *and* deleted its
+  `$validationRules` exports an empty example body; the requests themselves are still emitted.
+- **Blueprint still generates `$validationRules`** into new models. Generated code keeps working
+  because the model-level path is still supported.
+
+Full documentation: [Validation](./validation).
+
+**Backward compatibility.** Model-level validation — `$validationRules`, `$validationRulesStore`,
+`$validationRulesUpdate` including the role-keyed form, and `$validationRulesMessages` — is
+**deprecated but completely unchanged**, and is used for every model and action with no request class.
+There is no runtime deprecation warning. No route, URL, query parameter, status code or error envelope
+changed. `rhino-react` is unaffected and needs no upgrade. The deprecated path will be removed in
+**5.0**.
+
+:::warning Upgrade action: check for name collisions, then nothing
+No command is required. `routes/api.php` is **not** affected — do not republish routes. Republishing
+`config/rhino.php` is optional and only needed for the explicit `requests.map`, because every new key
+is read with a default:
+
+```bash title="terminal"
+php artisan vendor:publish --tag=config --force
+```
+
+Before deploying, check whether your app already owns a class named `App\Http\Requests\{Model}StoreRequest`
+or `{Model}UpdateRequest` for a Rhino-registered model — convention discovery will start applying it.
+See [Upgrading — 4.9 → 4.10](./upgrading#4-9-4-10).
+:::
+
 ## 4.9.0
 
 **Computed attributes take arguments, the same way scopes do.** A computed attribute used to be a

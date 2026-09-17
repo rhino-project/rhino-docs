@@ -202,7 +202,8 @@ model Post {
 Register it in `src/rhino.config.ts`. The slug (`posts`) becomes the URL segment and permission prefix; `model` is the Prisma client delegate name (camelCase):
 
 ```ts title="src/rhino.config.ts"
-import { z } from 'zod';
+import { PostStoreRequest } from './requests/post-store.request';
+import { PostUpdateRequest } from './requests/post-update.request';
 
 models: {
   posts: {
@@ -213,11 +214,8 @@ models: {
     defaultSort: '-createdAt',
     allowedIncludes: ['author', 'comments'],
     allowedSearch: ['title', 'content'],
-    validation: z.object({
-      title: z.string().max(255),
-      content: z.string(),
-      status: z.enum(['draft', 'published', 'archived']),
-    }),
+    // Validation lives in request classes — see Validation.
+    requests: { store: PostStoreRequest, update: PostUpdateRequest },
   },
 },
 ```
@@ -286,7 +284,8 @@ no base class and no decorators. Full reference: [Models](./models).
 |---|---|
 | `model` | **Required.** The Prisma delegate name (e.g. `'post'`) |
 | `policy` | A `ResourcePolicy` subclass for authorization ([Policies](./policies)) |
-| `validation` / `validationStore` / `validationUpdate` | Zod schemas; the store/update variants may be role-keyed ([Validation](./validation)) |
+| `requests` | `{ store?, update? }` — the request class that validates each write action ([Validation](./validation)) |
+| `validation` / `validationStore` / `validationUpdate` | **Deprecated**, removed in 5.0 — validation belongs in a request class ([Validation](./validation)) |
 | `allowedFilters` | Fields usable with `?filter[field]=value` |
 | `allowedSorts` / `defaultSort` | Fields usable with `?sort=`, plus the fallback sort |
 | `allowedSearch` | Fields swept by `?search=` (relation dot notation allowed) |
@@ -353,9 +352,40 @@ Pagination metadata comes back in **headers**: `X-Current-Page`, `X-Last-Page`, 
 
 ### 4. Validation
 
-Zod schemas on the registration define format; **which fields a role may write** lives on the policy.
-`validationStore` / `validationUpdate` can be role-keyed records. A forbidden field is a `403`; a
-malformed value is a `422` with field-level errors. See [Validation](./validation).
+Each model validates `store` and `update` with a **request class**, registered per action on the model:
+
+```ts title="src/requests/post-store.request.ts"
+export class PostStoreRequest extends ResourceRequest {
+  override authorize(ctx: ResourceRequestContext) { return ctx.routeGroup !== 'public'; }
+
+  // prepare() runs before the rules, so guard the type and leave anything
+  // malformed for them to reject.
+  override prepare(input: Record<string, any>) {
+    return {
+      ...input,
+      title: typeof input.title === 'string' ? input.title.trim() : input.title,
+    };
+  }
+
+  rules(ctx: ResourceRequestContext) {
+    return z.object({
+      title: z.string().max(255),
+      categoryId: z.number().int(),
+    });
+  }
+}
+
+// src/rhino.config.ts
+posts: { model: 'post', requests: { store: PostStoreRequest, update: PostUpdateRequest } },
+```
+
+`rules()` (which may be async) and `authorize()` receive the full context — `user`, `organization`,
+`routeGroup`, `action`, `record` (the pre-update row) and `input`. `authorize()` returning false is a
+`403` indistinguishable from a policy denial; a failed parse is a `422` with field-level errors.
+
+**The parse output is the write payload**: a field with no rule is silently dropped, not saved. **Which
+fields a role may write** still lives on the policy, and a forbidden field is a `403` before the request
+class runs. See [Validation](./validation).
 
 ### 5. Authorization
 
@@ -509,7 +539,7 @@ Knowing which layer you're debugging is usually the whole fix. See
 | Page | Read it for |
 |---|---|
 | [Models](./models) | Every `ModelRegistration` field, route keys, org scoping |
-| [Validation](./validation) | Zod schemas, role-keyed rules, field permissions |
+| [Validation](./validation) | Request classes, the write payload, field permissions, error shapes |
 | [Querying](./querying) | Filters, sorts, search, includes, fields, named scopes |
 | [Computed Attributes](./computed-attributes) | Derived values and aggregates |
 | [Request Lifecycle](./request-lifecycle) | The layers of a request |
@@ -525,6 +555,7 @@ Knowing which layer you're debugging is usually the whole fix. See
 | [Generator](./generator) | All CLI commands |
 | [Blueprint](./blueprint) | YAML-driven, deterministic codegen |
 | [Export Types](./export-types) | TypeScript types for the client |
+| [Upgrading](./upgrading) | Version-to-version upgrade notes |
 | [Release Notes](./release-notes) | What changed, newest first |
 
 The [React client docs](../react/getting-started) cover the hooks that consume this API.

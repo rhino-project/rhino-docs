@@ -14,7 +14,7 @@ During `php artisan rhino:install`, select **Yes** when asked about audit trail.
 Then add the `HasAuditTrail` trait to any model you want to track:
 
 ```php title="app/Models/Post.php"
-use Rhino\LaravelApi\Traits\HasAuditTrail;
+use Rhino\Traits\HasAuditTrail;
 
 class Post extends Model
 {

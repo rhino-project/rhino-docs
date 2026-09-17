@@ -100,9 +100,10 @@ models: {
 |---|---|---|---|
 | `model` | `string` | — | **Required.** The Prisma client delegate name (e.g., `'post'`). |
 | `policy` | `Type<ResourcePolicy>` | — | A `ResourcePolicy` subclass for authorization. See [Policies](./policies). |
-| `validation` | `ZodSchema` | — | Zod schema applied to both store and update. |
-| `validationStore` | `ZodSchema \| Record<string, ZodSchema>` | — | Overrides `validation` for create. Role-keyed when a record. |
-| `validationUpdate` | `ZodSchema \| Record<string, ZodSchema>` | — | Overrides `validation` for update. Role-keyed when a record. |
+| `requests` | `{ store?, update? }` | — | The `ResourceRequest` subclass that validates each write action. See [Validation](./validation). |
+| `validation` | `ZodSchema` | — | **Deprecated**, removed in 5.0. Zod schema applied to both store and update. |
+| `validationStore` | `ZodSchema \| Record<string, ZodSchema>` | — | **Deprecated**, removed in 5.0. Overrides `validation` for create. Role-keyed when a record. |
+| `validationUpdate` | `ZodSchema \| Record<string, ZodSchema>` | — | **Deprecated**, removed in 5.0. Overrides `validation` for update. Role-keyed when a record. |
 | `allowedFilters` | `string[]` | `[]` | Fields filterable via `?filter[field]=value`. |
 | `allowedSorts` | `string[]` | `[]` | Fields sortable via `?sort=field`. Prefix with `-` for descending. |
 | `defaultSort` | `string` | — | Sort applied when no `?sort` is provided (e.g., `'-createdAt'`). |
@@ -208,18 +209,21 @@ posts: {
 
 ### Validation
 
-Provide Zod schemas via `validation`, `validationStore`, or `validationUpdate`. Field permissions (which fields each user can submit) are controlled by the **policy**, not the schema.
+Register a request class per write action with `requests: { store, update }`. It owns the whole shape contract for that action and sees the user, the organization, the route group and the record being updated.
+
+:::caution The `validation` schemas are deprecated
+`validation`, `validationStore` and `validationUpdate` (including the role-keyed form) are **deprecated** and will be removed in 5.0. They are used only for a model and action with no request class. See [Validation](./validation).
+:::
+
+Field permissions (which fields each user can submit) are controlled by the **policy**, not the schema.
 
 ```ts title="src/rhino.config.ts"
-import { z } from 'zod';
+import { PostStoreRequest } from './requests/post-store.request';
+import { PostUpdateRequest } from './requests/post-update.request';
 
 posts: {
   model: 'post',
-  validation: z.object({
-    title: z.string().max(255),
-    content: z.string(),
-    status: z.enum(['draft', 'published', 'archived']),
-  }),
+  requests: { store: PostStoreRequest, update: PostUpdateRequest },
 },
 ```
 

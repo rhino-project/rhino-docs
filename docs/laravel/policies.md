@@ -49,7 +49,7 @@ A minimal policy requires no method implementations at all. The base class handl
 
 namespace App\Policies;
 
-use Rhino\LaravelApi\Policies\ResourcePolicy;
+use Rhino\Policies\ResourcePolicy;
 
 class PostPolicy extends ResourcePolicy
 {
@@ -231,7 +231,7 @@ Control which columns are visible in API responses using two complementary metho
 namespace App\Policies;
 
 use Illuminate\Contracts\Auth\Authenticatable;
-use Rhino\LaravelApi\Policies\ResourcePolicy;
+use Rhino\Policies\ResourcePolicy;
 
 class UserPolicy extends ResourcePolicy
 {
@@ -411,7 +411,7 @@ While the base `ResourcePolicy` handles most cases, you can override any policy 
 namespace App\Policies;
 
 use Illuminate\Contracts\Auth\Authenticatable;
-use Rhino\LaravelApi\Policies\ResourcePolicy;
+use Rhino\Policies\ResourcePolicy;
 
 class PostPolicy extends ResourcePolicy
 {

@@ -12,7 +12,7 @@ Scaffold models, policies, scopes, and more with interactive CLI commands.
 | Command | Alias | Description |
 |---------|-------|-------------|
 | `rails rhino:install` | — | Interactive project setup |
-| `rails rhino:generate` | `rails rhino:g` | Scaffold resources (models, policies, scopes) |
+| `rails rhino:generate` | `rails rhino:g` | Scaffold resources (models, policies, scopes, request classes) |
 | `rails rhino:export_postman` | — | Generate Postman collection |
 | `rails invitation:link` | — | Generate invitation link for testing |
 
@@ -201,6 +201,32 @@ end
 ```
 
 The generated scope extends `Rhino::ResourceScope`, giving you access to `user`, `organization`, and `role` inside the `apply` method for role-based or user-specific filtering. If the model uses the `HasAutoScope` concern (included in `RhinoModel` by default), this scope is automatically applied.
+
+### Generating a Request
+
+```bash title="terminal"
+rails rhino:generate
+# Select: Request (validation for store/update)
+# Resource name: BlogPost
+# Which request classes should be generated? Both
+```
+
+Generates `app/requests/blog_post_store_request.rb` and `app/requests/blog_post_update_request.rb` — the names Rhino discovers by convention, in a directory Zeitwerk already autoloads, so nothing needs registering:
+
+```ruby title="app/requests/blog_post_store_request.rb"
+class BlogPostStoreRequest < Rhino::ResourceRequest
+  # attribute :title, :string
+  # attribute :project_id, :integer
+
+  # validates :title, presence: true, length: { maximum: 255 }
+end
+```
+
+The real template is heavily commented: it shows `authorize?` and `prepare`, a validation that branches on `user`, one that branches on `route_group`, and — on the update class — one that reads `record`. It also states the rule that catches people out: **declare an `attribute` for every field the action should write**, because the declared attributes are the write payload.
+
+Choosing **Store only** or **Update only** generates just that class. An existing file is never overwritten without a confirmation.
+
+See [Validation](./validation) for what each hook does.
 
 ## Supported Column Types
 

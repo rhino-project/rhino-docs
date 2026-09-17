@@ -455,7 +455,7 @@ Request
 | 3 | **Authorization & Policies** | ResourcePolicy base class with convention-based permission checks (`{slug}.{action}`). Wildcards supported |
 | 4 | **Role-Based Access Control (layered)** | Shared per-org role layer (`org_role_permissions`) + per-user `granted_permissions`/`denied_permissions` deltas; `effective = (role ∪ granted) − denied`, deny wins. Wildcards on every layer. |
 | 5 | **Attribute-Level Permissions** | Control which fields each role can read and write |
-| 6 | **Validation** | Dual-layer: format rules + field presence rules. Supports role-keyed rules |
+| 6 | **Validation** | Per-model, per-action request classes (`{Model}StoreRequest` / `{Model}UpdateRequest`) with the user, organization, route group and pre-update record in scope. Their validated output IS the write payload |
 | 7 | **Cross-Tenant FK Validation** | `exists:` rules auto-scoped to current organization |
 | 8 | **Filtering** | `?filter[field]=value` with AND/OR logic. An attribute the policy hides returns 403 |
 | 9 | **Sorting** | `?sort=field` or `?sort=-field`, supports multiple fields. An attribute the policy hides returns 403 |
@@ -522,18 +522,7 @@ Optional traits (add based on project needs):
 // Mass-assignable fields
 protected $fillable = ['title', 'body', 'status'];
 
-// Validation rules (format layer)
-protected $validationRules = [
-    'title' => 'required|string|max:255',
-    'body'  => 'required|string',
-    'status' => 'in:draft,published,archived',
-];
-
-// Which fields are required when CREATING (presence layer)
-protected $validationRulesStore = ['title', 'body'];
-
-// Which fields are required when UPDATING (presence layer)
-protected $validationRulesUpdate = ['title'];
+// Validation does NOT live on the model — see "Validation" below.
 
 // Query builder configuration
 protected static allowedFilters  = ['status', 'category_id'];
@@ -544,19 +533,70 @@ protected static allowedIncludes = ['author', 'comments'];
 protected static allowedSearch   = ['title', 'body'];
 ```
 
-### Role-Based Validation
+### Validation
 
-When different roles can edit different fields:
+`store` and `update` are validated by a **request class** per model, per action. Rhino finds
+`App\Http\Requests\{Model}StoreRequest` and `{Model}UpdateRequest` by convention — no registration:
 
 ```php
-protected $validationRulesStore = [
-    'admin'  => ['title' => 'required', 'body' => 'required', 'featured' => 'nullable'],
-    'editor' => ['title' => 'required', 'body' => 'required'],
-    '*'      => ['title' => 'required', 'body' => 'required'],
-];
+namespace App\Http\Requests;
+
+use Rhino\Http\Requests\ResourceRequest;
+
+class PostStoreRequest extends ResourceRequest
+{
+    // Narrower than the policy's create gate, which has already passed.
+    // Returning false is a 403 identical to a policy denial.
+    public function authorize(): bool
+    {
+        return $this->routeGroup() !== 'public';
+    }
+
+    // Runs AFTER the policy's forbidden-field check and BEFORE authorize().
+    // Everything it writes is server-authored — never copy a client value into
+    // a key the policy denies.
+    public function prepare(array $input): array
+    {
+        $input['title'] = trim($input['title'] ?? '');
+
+        return $input;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'title' => 'required|string|max:255',
+            'body'  => 'required|string',
+            // exists: is scoped to the current organization automatically —
+            // do NOT append ',organization_id,N' yourself.
+            'category_id' => 'required|integer|exists:categories,id',
+            // Role-dependent rules are an ordinary branch, not a role-keyed map.
+            'status' => $this->user()?->getRoleSlugForValidation($this->organization()) === 'admin'
+                ? 'required|string'
+                : 'required|string|in:draft',
+        ];
+    }
+}
 ```
 
-Fields not listed for a role are silently stripped from the request. This is a security feature that prevents unauthorized field modification.
+Available inside the class: `$this->user()`, `$this->organization()`, `$this->routeGroup()`,
+`$this->action()` and, on update, `$this->record()` (the row before the write).
+
+**IMPORTANT: `validated()` is the write payload.** A field with no rule is silently dropped and never
+persisted. Declare a rule for every field the action should write, even a loose `'nullable'` one.
+
+**IMPORTANT: an `UpdateRequest` gets no automatic partial-update relaxation** — mark every rule
+`sometimes` yourself.
+
+Which fields each role may write still belongs on the **policy**
+(`permittedAttributesForCreate` / `permittedAttributesForUpdate`), which answers 403 before the request
+class runs. Never encode that as a validation rule.
+
+Scaffold a class with `php artisan rhino:generate` → **Request**.
+
+**DEPRECATED — do not write new ones.** Model-level `$validationRules` /
+`$validationRulesStore` / `$validationRulesUpdate`, including the role-keyed form, still work for a
+model and action with no request class, but they are removed in 5.0.
 
 ### Policies
 
@@ -921,29 +961,8 @@ class Contract extends Model
         'end_date' => 'date',
     ];
 
-    // Validation rules (format)
-    protected $validationRules = [
-        'title' => 'required|string|max:255',
-        'counterparty_name' => 'required|string|max:255',
-        'total_value' => 'nullable|numeric|min:0',
-        'status' => 'in:draft,active,expired,terminated',
-        'start_date' => 'required|date',
-        'end_date' => 'nullable|date|after:start_date',
-        'organization_id' => 'required|exists:organizations,id',
-    ];
-
-    // Fields required on create
-    protected $validationRulesStore = [
-        'title',
-        'counterparty_name',
-        'start_date',
-    ];
-
-    // Fields that can be sent on update
-    protected $validationRulesUpdate = [
-        'title',
-        'status',
-    ];
+    // Validation lives in app/Http/Requests/ContractStoreRequest.php and
+    // ContractUpdateRequest.php — see "Validation" above.
 
     // Query builder config
     protected static allowedFilters  = ['status', 'counterparty_name'];

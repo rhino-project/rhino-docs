@@ -104,9 +104,8 @@ Create a model (or use the [generator](./generator)):
 
 ```ruby title="app/models/post.rb"
 class Post < Rhino::RhinoModel
-  # Validation (ActiveModel — use allow_nil: true for all validators)
-  validates :title, length: { maximum: 255 }, allow_nil: true
-  validates :status, inclusion: { in: %w[draft published archived] }, allow_nil: true
+  # Validation lives in app/requests/post_store_request.rb and
+  # post_update_request.rb — see Validation.
 
   # Field permissions are controlled by the policy (PostPolicy).
 
@@ -223,7 +222,7 @@ Every DSL call below is optional — declare only what differs from the default.
 
 | DSL | Purpose |
 |---|---|
-| ActiveModel `validates` | Format rules — use `allow_nil: true` on every validator ([Validation](./validation)) |
+| ActiveModel `validates` | **Deprecated**, removed in 5.0 — validation belongs in a request class ([Validation](./validation)) |
 | `rhino_filters` | Fields usable with `?filter[field]=value` |
 | `rhino_sorts` / `rhino_default_sort` | Fields usable with `?sort=`, plus the fallback sort |
 | `rhino_search` | Fields swept by `?search=` (dot-notation allowed, e.g. `'user.name'`) |
@@ -297,9 +296,39 @@ Pagination metadata comes back in **headers**: `X-Current-Page`, `X-Last-Page`, 
 
 ### 5. Validation
 
-Format rules are plain ActiveModel validators on the model (always `allow_nil: true`, so partial
-updates work); **which fields a role may write** lives on the policy. A forbidden field is a `403`; a
-malformed value is a `422` with field-level errors. See [Validation](./validation).
+Each model validates `store` and `update` with a **request class** — `{Model}StoreRequest` and
+`{Model}UpdateRequest` in `app/requests/`, extending `Rhino::ResourceRequest`. Zeitwerk autoloads the
+directory, so there is nothing to register:
+
+```ruby title="app/requests/post_store_request.rb"
+class PostStoreRequest < Rhino::ResourceRequest
+  attribute :title, :string
+  attribute :category_id, :integer
+
+  validates :title, presence: true, length: { maximum: 255 }
+  validates :category_id, presence: true
+
+  def authorize? = route_group != "public"
+
+  # prepare runs before the validations and sees raw client input, so every
+  # string operation is guarded. Note that `attribute :title, :string` casts
+  # whatever survives — add a `validate` that inspects the raw value when the
+  # shape matters. See Validation.
+  def prepare(input)
+    title = input["title"]
+    input.merge("title" => title.is_a?(String) ? title.strip : title)
+  end
+end
+```
+
+Rules are ordinary ActiveModel declarations and can branch on `user`, `organization`, `route_group`,
+`action` and — on update — `record`, the row as it was before the write. `authorize?` returning false is
+a `403` indistinguishable from a policy denial; failing validations are a `422` with field-level errors,
+merged with the cross-tenant foreign-key check.
+
+**The declared attributes present in the input are the write payload**: a field with no `attribute` is
+silently dropped, not saved. **Which fields a role may write** still lives on the policy, and a
+forbidden field is a `403` before the request class runs. See [Validation](./validation).
 
 ### 6. Authorization
 
@@ -451,7 +480,7 @@ Knowing which layer you're debugging is usually the whole fix. See
 | Page | Read it for |
 |---|---|
 | [Models](./models) | Every DSL call and concern, route keys |
-| [Validation](./validation) | Validators, field permissions, error shapes |
+| [Validation](./validation) | Request classes, the write payload, field permissions, error shapes |
 | [Querying](./querying) | Filters, sorts, search, includes, fields, named scopes |
 | [Computed Attributes](./computed-attributes) | Derived values and aggregates |
 | [Request Lifecycle](./request-lifecycle) | The layers of a request |
@@ -465,6 +494,7 @@ Knowing which layer you're debugging is usually the whole fix. See
 | [Generator](./generator) | All Rake/Rails commands |
 | [Blueprint](./blueprint) | YAML-driven, deterministic codegen |
 | [Export Types](./export-types) | TypeScript types for the client |
+| [Upgrading](./upgrading) | Version-to-version upgrade notes |
 | [Release Notes](./release-notes) | What changed, newest first |
 
 The [React client docs](../react/getting-started) cover the hooks that consume this API.

@@ -36,7 +36,7 @@ public function update(Request $request, Ticket $ticket)
 
 namespace App\Policies;
 
-use Rhino\LaravelApi\Policies\ResourcePolicy;
+use Rhino\Policies\ResourcePolicy;
 
 class TicketPolicy extends ResourcePolicy
 {
@@ -171,7 +171,7 @@ class TicketPolicy extends ResourcePolicy
 namespace App\Policies;
 
 use Illuminate\Contracts\Auth\Authenticatable;
-use Rhino\LaravelApi\Policies\ResourcePolicy;
+use Rhino\Policies\ResourcePolicy;
 
 class TicketPolicy extends ResourcePolicy
 {
@@ -261,7 +261,7 @@ class CategoryPolicy extends ResourcePolicy
 namespace App\Policies;
 
 use Illuminate\Contracts\Auth\Authenticatable;
-use Rhino\LaravelApi\Policies\ResourcePolicy;
+use Rhino\Policies\ResourcePolicy;
 
 class CategoryPolicy extends ResourcePolicy
 {

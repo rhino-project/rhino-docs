@@ -218,6 +218,10 @@ end
 
 Adds format validation to your model. Rhino calls `validate_for_action()` automatically during `store` and `update` actions.
 
+:::caution Validation belongs in a request class
+`store` and `update` are validated by `{Model}StoreRequest` / `{Model}UpdateRequest` in `app/requests/`, which see the user, the organization, the route group and the record being updated. The model-level validators below are **deprecated** and will be removed in 5.0; they are used only for a model and action with no request class. See [Validation](./validation).
+:::
+
 Format constraints are defined using standard ActiveModel `validates` declarations. Field permissions (which fields each role can set) are defined on the policy.
 
 ```ruby title="app/models/post.rb"

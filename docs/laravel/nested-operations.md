@@ -215,7 +215,42 @@ If any permission check fails, the entire batch is rejected with a 403.
 
 ## Validation
 
-Each operation's data is validated against the model's validation rules (including role-based rules). All validations run before any operations execute.
+Each operation is validated by the [request class](./validation) of its own model and action: a `create`
+operation runs `{Model}StoreRequest`, an `update` operation runs `{Model}UpdateRequest` with `record()`
+populated by an organization-scoped lookup of the row being updated. `action()` is `'store'` / `'update'`
+as usual, and the class's `validated()` output — merged with the resolved references — is what gets
+written. A model with no request class for that action falls back to its model-level rules. All
+operations are validated before any of them execute.
+
+:::warning `routeGroup()` is `null` inside nested operations
+`POST /nested` is registered as a single route outside the per-group loop, so it carries no `route_group`
+default and `$this->routeGroup()` returns `null` for every operation in the batch — even though the route
+sits under the tenant prefix and `$this->organization()` **is** populated from it.
+
+A rule written as `$this->routeGroup() === 'admin' ? … : …` therefore takes its non-admin branch in a
+nested write. If a rule must vary by group, key it off something that survives the trip —
+`$this->organization()`, `$this->user()`'s role, or `$this->action()` — or make the group-restricted
+branch the stricter one so the nested path fails closed.
+:::
+
+:::note `$N.field` references never reach the request class
+A cross-operation reference such as `"blog_id": "$0.id"` is stripped from the data before validation and
+merged back into the write payload afterwards, so a request class can never see — or reject — a
+placeholder. The rules declared for a referenced field are skipped for that operation, `required`
+included, because the client did supply a value; it just is not known yet.
+:::
+
+Failures keep the nested envelope, keyed by operation index:
+
+```json title="422 Unprocessable Entity"
+{
+    "message": "Validation failed.",
+    "errors": { "operations.0.data.title": ["Every post needs a title."] }
+}
+```
+
+A request class whose `authorize()` returns false rejects the whole batch with the same `403` a policy
+denial returns: `{"message":"This action is unauthorized."}`.
 
 ## Real-World Examples
 

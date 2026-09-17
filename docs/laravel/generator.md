@@ -16,7 +16,7 @@ For batch generation with **fully working permission methods**, see [Blueprint](
 | Command | Alias | Description |
 |---------|-------|-------------|
 | `rhino:install` | — | Interactive project setup |
-| `rhino:generate` | `rhino:g` | Scaffold resources (models, policies, scopes) |
+| `rhino:generate` | `rhino:g` | Scaffold resources (models, policies, scopes, request classes) |
 | `rhino:blueprint` | — | Generate from YAML specs ([docs](./blueprint.md)) |
 | `rhino:export-postman` | — | Generate Postman collection |
 | `invitation:link` | — | Generate invitation link for testing |
@@ -104,7 +104,7 @@ This generates:
 
 namespace App\Models;
 
-use Rhino\LaravelApi\Models\RhinoModel;
+use Rhino\Models\RhinoModel;
 
 class BlogPost extends RhinoModel
 {
@@ -189,7 +189,7 @@ Generates `app/Policies/BlogPostPolicy.php`:
 
 namespace App\Policies;
 
-use Rhino\LaravelApi\Policies\ResourcePolicy;
+use Rhino\Policies\ResourcePolicy;
 
 class BlogPostPolicy extends ResourcePolicy
 {
@@ -230,6 +230,45 @@ class BlogPostScope implements Scope
 ```
 
 If the model uses the `HasAutoScope` trait, this scope is automatically applied.
+
+### Generating a Request
+
+```bash title="terminal"
+php artisan rhino:generate
+# Select: Request (validation for store/update)
+# Resource name: BlogPost
+# Which request classes would you like? Both
+```
+
+Generates `app/Http/Requests/BlogPostStoreRequest.php` and `app/Http/Requests/BlogPostUpdateRequest.php` — the names Rhino discovers by convention, so nothing needs registering:
+
+```php title="app/Http/Requests/BlogPostStoreRequest.php"
+<?php
+
+namespace App\Http\Requests;
+
+use Rhino\Http\Requests\ResourceRequest;
+
+class BlogPostStoreRequest extends ResourceRequest
+{
+    /**
+     * @return array<string, mixed>
+     */
+    public function rules(): array
+    {
+        return [
+            // 'title' => 'required|string|max:255',
+            // 'project_id' => 'required|integer|exists:projects,id',
+        ];
+    }
+}
+```
+
+The real stub is heavily commented: it shows `authorize()`, `prepare()`, `messages()` and `withValidator()`, an organization-scoped `exists:` rule, a role-dependent rule, a route-group-dependent rule, and — on the update class — a rule that reads `record()`. It also states the rule that catches people out: **declare a rule for every field the action should write**, because `validated()` is the write payload.
+
+Choosing **Store only** or **Update only** generates just that class. An existing file is never overwritten without a confirmation.
+
+See [Validation](./validation) for what each hook does.
 
 ## Supported Column Types
 

@@ -215,7 +215,32 @@ If any permission check fails, the entire batch is rejected with a 403.
 
 ## Validation
 
-Each operation's data is validated against the model's validation rules (including role-based rules). All validations run before any operations execute.
+Each operation is validated by the [request class](./validation) of its own model and action: a `create`
+operation runs `{Model}StoreRequest`, an `update` operation runs `{Model}UpdateRequest` with `record`
+populated by an organization-scoped, non-failing lookup of the row being updated — `nil` when the id
+matches nothing, so the authorization step still reports the miss in the order it always has. A model
+with no request class for that action falls back to its model-level validations. All operations are
+validated before any of them execute.
+
+`route_group` is the one context value that does not survive the trip: the nested endpoint is registered
+under the tenant prefix but outside the per-group scope that sets the `route_group` default, so it is
+`nil` for every operation in the batch while `organization` is populated as normal. A validation guarded
+by `if: -> { route_group == "admin" }` does not run here — branch on `organization`, the user's role or
+`action` instead, or make the group-restricted branch the stricter one.
+
+The cross-tenant foreign-key check runs on the request class's write payload here too, so an operation
+referencing another organization's row is refused rather than written. Failures keep the nested
+envelope, keyed by operation index:
+
+```json title="422 Unprocessable Entity"
+{
+    "message": "Validation failed.",
+    "errors": { "operations.0.data.category_id": ["does not belong to your organization"] }
+}
+```
+
+A request class whose `authorize?` returns false rejects the whole batch with the same `403` a policy
+denial returns: `{"message":"This action is unauthorized."}`.
 
 ## Real-World Examples
 

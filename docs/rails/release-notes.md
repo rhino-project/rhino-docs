@@ -7,6 +7,147 @@ title: Release Notes
 
 Notable changes in each release of Rhino for Rails, newest first.
 
+## 4.10.0
+
+**Validation moves off the model and into a request class that can see the whole request.** Model-level
+ActiveModel validations ran against a blank `Model.new`, which is why every validator needed
+`allow_nil: true` and why nothing conditional could be expressed: the validations had no access to the
+current user, the organization, the route group or the record being updated. A model may now declare
+`{Model}StoreRequest` and `{Model}UpdateRequest` in `app/requests/`, each owning the entire shape
+contract for one action.
+
+```ruby title="app/requests/post_store_request.rb"
+class PostStoreRequest < Rhino::ResourceRequest
+  attribute :title, :string
+  attribute :status, :string
+  attribute :category_id, :integer
+
+  validates :title, presence: true, length: { maximum: 255 }
+  validates :category_id, presence: true, numericality: { only_integer: true }
+  validates :status, inclusion: { in: %w[draft] },
+            if: -> { user&.role_slug_for_validation(organization) != "admin" }
+
+  def authorize?
+    route_group != "public"
+  end
+
+  def prepare(input)
+    input.merge("title" => input["title"].to_s.strip)
+  end
+end
+```
+
+```bash title="terminal"
+curl -X POST '/api/acme/posts' -d '{"title":"","status":"published","category_id":4}'
+```
+
+```json
+{ "errors": { "title": ["can't be blank"], "status": ["is not included in the list"] } }
+```
+
+- **`app/requests/` needs no wiring.** Zeitwerk autoloads every `app/*` directory, so there is no
+  initializer to edit and no `eager_load_paths` entry to add.
+- **Discovery is per action.** An explicit `config.model :posts, "Post", store_request: "CreatePost"`
+  wins, then the convention `{Model}StoreRequest` / `{Model}UpdateRequest`, then the model-level
+  validations. A model may declare only a store class. Registrations are **class name strings**, and
+  Rhino re-resolves them on every request, so a dev-mode Zeitwerk reload never hands back an unloaded
+  constant.
+- **Six context readers** — `user`, `organization`, `route_group`, `action`, `record`, `input` — are in
+  scope for `authorize?`, `prepare` and every validation. `record` is the pre-update row, from the
+  organization-scoped query the update already performed.
+- **There is no `rules` method and no `messages` method.** Rules stay ordinary ActiveModel
+  declarations; dynamic rules use `validate :method_name` or `if: -> { … }`, and messages use the
+  standard `message:` option or i18n.
+- **`prepare` runs after the policy's forbidden-field check and before `authorize?`**, so it can never
+  launder a denied field past the policy, and `authorize?` always sees normalized input.
+- **`authorize?` returning false is a `403` byte-identical to a policy denial** —
+  `{"message":"This action is unauthorized."}`, hard-coded.
+- **The declared attributes present in the prepared input are the write payload**, with their cast
+  values. A field with no `attribute` is dropped, not persisted. Rhino does **not** intersect them with
+  `permitted_attributes_for_create/update`, and does **not** relax an update to the keys the client
+  sent — an update class declares `allow_nil: true` itself.
+- **The cross-tenant FK check runs on top of the request class's own validations**, through the same
+  direct-and-indirect implementation the model-level path uses, merged into the same `422`. It reads
+  the write payload, so an undeclared foreign key is neither written nor checked.
+- **Nested operations use the same classes**, per operation, with `record` resolved by an
+  organization-scoped, non-failing lookup so today's `403` / `404` ordering does not shift.
+- **Model-level `validates` still run at save time**, inside `create!` / `update!`. A model rule the
+  request class does not reproduce is not consulted while the rules run, but it can still refuse the
+  write; the resulting `ActiveRecord::RecordInvalid` is rescued and rendered as the standard `422`
+  `{"errors": {field: [messages]}}`, built from the record's own errors. Inside `POST /nested` it rolls
+  the transaction back and keeps the nested envelope,
+  `{"message":"Validation failed.","errors":{"operations.0.data.title":[…]}}`. The rescue is confined to
+  the request-class branches — the legacy path ran those rules up front and is unchanged. Keep a request
+  class's rules a superset of the model's, or move them off the model. See [Validation](./validation).
+- **A misregistered request class raises.** A `store_request:` / `update_request:` naming a constant
+  that does not exist, or that does not inherit from `Rhino::ResourceRequest`, raises
+  `Rhino::ConfigurationError`; a silently ignored validation class is a security hole. A *convention*
+  name with the wrong superclass is logged and ignored instead.
+- **`rails rhino:generate` gained a fourth menu entry, `request`**, which asks for store, update or
+  both and writes a fully commented template into `app/requests/`.
+- **Blueprint still generates model-level `validates`** into new models. Generated code keeps working
+  because the model-level path is still supported.
+
+Full documentation: [Validation](./validation).
+
+### Fixes
+
+- **SECURITY — `POST /nested` did not tenant-scope the record an update operation targets.** See below.
+
+:::danger Security fix: cross-tenant writes through `POST /nested`
+`authorize_nested_operation` resolved an update operation's target with a bare
+`op_model_class.find(operation["id"])` — no organization scoping at all. An authenticated member of one
+organization could therefore update another organization's records by id through `POST /nested`.
+
+The only models that escaped were those including `Rhino::BelongsToOrganization`, and then only by
+accident: that concern's `default_scope` narrowed the `find` for them. Everything else was writable
+cross-tenant — a plain `organization_id` column, a custom `for_organization` scope, and every indirect
+`belongs_to` chain (`task → project → organization`). The member `PUT` endpoint was never affected;
+`find_record` has always scoped.
+
+The lookup now goes through the same mechanism the member endpoints use:
+
+```ruby
+# ❌ Before — unscoped; org B could name org A's id
+record = op_model_class.find(operation["id"])
+
+# ✅ After — the same lenient org scope find_record and index apply
+record = Rhino::ScopesToOrganization.scope_to_organization(
+  op_model_class.all, op_model_class, current_organization
+).find(operation["id"])
+```
+
+A cross-organization id now raises `ActiveRecord::RecordNotFound` and is indistinguishable from an id
+that does not exist. A model with no organization mechanism stays reachable, and a request with no
+organization context is unscoped, exactly as before.
+
+**This is present in 4.9.0 and earlier — upgrade if you expose `POST /nested` at all.** Nested supports
+only `create` and `update` operations, so no data could be deleted this way.
+
+One thing that limited real-world exposure: the tenant nested route currently only resolves when the
+request also carries `?model_slug=`, because the route sets no `model_slug` default and the controller's
+`set_model_class` runs for every action. Without it the endpoint answers `404` before reaching the
+operations. That is a pre-existing routing bug tracked separately, not part of this fix — do not rely on
+it as mitigation.
+:::
+
+**Backward compatibility.** Model-level ActiveModel validations are **deprecated but completely
+unchanged**, and are used for every model and action with no request class. There is no runtime
+deprecation warning. No route, URL, query parameter, status code or error envelope changed.
+`rhino-react` is unaffected and needs no upgrade. The deprecated path will be removed in **5.0**.
+
+One behavior does change, and only on the new path: **an operation inside `POST /nested` that is
+validated by a request class now also runs the cross-tenant foreign-key check**. The model-level
+nested path validates without the organization, so it never ran there. A nested operation referencing
+another organization's row, which used to be written, is now a `422` — a fix, not a regression.
+
+:::warning Upgrade action: none
+`bundle update rhino-rails` and you are done. No initializer change, no `eager_load_paths` entry, no
+migration, no route change. Nothing in a 4.9.0 app can be picked up by convention discovery, because a
+convention name that is not a `Rhino::ResourceRequest` is logged and ignored. See
+[Upgrading — 4.9 → 4.10](./upgrading#4-9-4-10).
+:::
+
 ## 4.9.0
 
 **Computed attributes take arguments, the same way scopes do.** A computed attribute used to be a

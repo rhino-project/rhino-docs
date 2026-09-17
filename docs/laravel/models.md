@@ -12,7 +12,7 @@ Rhino models are standard Laravel Eloquent models enhanced with declarative stat
 The recommended way to create Rhino models is to extend `RhinoModel` — a convenience base class that pre-includes all the core traits you need:
 
 ```php title="app/Models/Post.php"
-use Rhino\LaravelApi\Models\RhinoModel;
+use Rhino\Models\RhinoModel;
 
 class Post extends RhinoModel
 {
@@ -41,9 +41,9 @@ You no longer need to manually `use` these traits on every model.
 These traits are **not** included in `RhinoModel` because they require additional database columns or configuration. Add them manually when needed:
 
 ```php title="app/Models/Post.php"
-use Rhino\LaravelApi\Models\RhinoModel;
-use Rhino\LaravelApi\Traits\HasAuditTrail;
-use Rhino\LaravelApi\Traits\BelongsToOrganization;
+use Rhino\Models\RhinoModel;
+use Rhino\Traits\HasAuditTrail;
+use Rhino\Traits\BelongsToOrganization;
 
 class Post extends RhinoModel
 {
@@ -70,7 +70,7 @@ php artisan vendor:publish --tag=rhino-model
 This creates `app/Models/RhinoModel.php` in your project, which extends the package's base class. Add your own traits or configuration that should apply to all Rhino models:
 
 ```php title="app/Models/RhinoModel.php"
-use Rhino\LaravelApi\Models\RhinoModel as BaseRhinoModel;
+use Rhino\Models\RhinoModel as BaseRhinoModel;
 
 class RhinoModel extends BaseRhinoModel
 {
@@ -91,9 +91,9 @@ Below is a complete model example demonstrating **all** available static propert
 
 namespace App\Models;
 
-use Rhino\LaravelApi\Models\RhinoModel;
-use Rhino\LaravelApi\Traits\HasAuditTrail;
-use Rhino\LaravelApi\Traits\BelongsToOrganization;
+use Rhino\Models\RhinoModel;
+use Rhino\Traits\HasAuditTrail;
+use Rhino\Traits\BelongsToOrganization;
 
 class Post extends RhinoModel
 {
@@ -218,6 +218,10 @@ Adds declarative validation to your model via `validateStore()` and `validateUpd
 
 **Included in RhinoModel** — no need to add manually.
 
+:::caution Validation belongs in a request class
+`store` and `update` are validated by `App\Http\Requests\{Model}StoreRequest` / `{Model}UpdateRequest`, which see the user, the organization, the route group and the record being updated. The model properties below are **deprecated** and will be removed in 5.0; they are used only for a model and action with no request class. See [Validation](./validation).
+:::
+
 **Model properties:**
 
 | Property | Type | Description |
@@ -228,7 +232,7 @@ Adds declarative validation to your model via `validateStore()` and `validateUpd
 Which fields each role can create or update is controlled by the policy's `permittedAttributesForCreate()` and `permittedAttributesForUpdate()` methods. See [Policies — Attribute Permissions](./policies#attribute-permissions).
 
 ```php title="app/Models/Post.php"
-use Rhino\LaravelApi\Models\RhinoModel;
+use Rhino\Models\RhinoModel;
 
 class Post extends RhinoModel
 {
@@ -277,7 +281,7 @@ Permissions follow the pattern of the resource slug (the key in your `config/rhi
 - `posts.*` -- grants access to all actions on posts
 
 ```php title="app/Models/User.php"
-use Rhino\LaravelApi\Traits\HasPermissions;
+use Rhino\Traits\HasPermissions;
 
 class User extends RhinoModel
 {
@@ -315,7 +319,7 @@ Automatically records changes to your model in an audit log. Rhino tracks creati
 | `$auditExclude` | `array` | `['password', 'remember_token']` | Fields excluded from audit log entries. Use this to prevent sensitive data from being recorded. |
 
 ```php title="app/Models/User.php"
-use Rhino\LaravelApi\Traits\HasAuditTrail;
+use Rhino\Traits\HasAuditTrail;
 
 class User extends RhinoModel
 {
@@ -349,7 +353,7 @@ For full details on querying and managing audit logs, see the [Audit Trail](./au
 Automatically generates a UUID for the model when it is created. The trait hooks into Eloquent's `creating` event and fills the `uuid` column if it is empty.
 
 ```php title="app/Models/Invoice.php"
-use Rhino\LaravelApi\Traits\HasUuid;
+use Rhino\Traits\HasUuid;
 
 class Invoice extends RhinoModel
 {
@@ -388,7 +392,7 @@ Provides multi-tenant organization scoping. This trait automatically filters all
 | Auto-set on create | Automatic | `organization_id` is filled from the current request context on creation. |
 
 ```php title="app/Models/Post.php"
-use Rhino\LaravelApi\Traits\BelongsToOrganization;
+use Rhino\Traits\BelongsToOrganization;
 
 class Post extends RhinoModel
 {
@@ -556,8 +560,8 @@ Adds utility methods for formatting data in API responses. Currently provides cu
 | `CurrencyOption::CHF` | `CHF` | `CHF1,234.56` |
 
 ```php title="app/Models/Product.php"
-use Rhino\LaravelApi\Traits\ViewModelHelpers;
-use Rhino\LaravelApi\Enums\CurrencyOption;
+use Rhino\Traits\ViewModelHelpers;
+use Rhino\Enums\CurrencyOption;
 
 class Product extends RhinoModel
 {
@@ -583,10 +587,10 @@ Below is a full real-world model that combines multiple Rhino traits into a feat
 
 namespace App\Models;
 
-use Rhino\LaravelApi\Models\RhinoModel;
-use Rhino\LaravelApi\Traits\HasAuditTrail;
-use Rhino\LaravelApi\Traits\HasUuid;
-use Rhino\LaravelApi\Traits\BelongsToOrganization;
+use Rhino\Models\RhinoModel;
+use Rhino\Traits\HasAuditTrail;
+use Rhino\Traits\HasUuid;
+use Rhino\Traits\BelongsToOrganization;
 
 class BlogPost extends RhinoModel
 {

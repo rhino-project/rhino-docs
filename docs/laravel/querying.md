@@ -40,7 +40,7 @@ Fields **not** listed in these arrays are silently ignored. This is a security f
 
 ### Attribute permissions apply to queries too
 
-The allowlists above are global: they say which columns are queryable at all. The policy's [attribute permissions](./policies#attribute-level-permissions) then say which of those **this user** may query.
+The allowlists above are global: they say which columns are queryable at all. The policy's [attribute permissions](./policies#attribute-permissions) then say which of those **this user** may query.
 
 An attribute the policy hides is refused as a filter or a sort:
 

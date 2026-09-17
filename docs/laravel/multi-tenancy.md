@@ -230,7 +230,7 @@ non-tenant subdomains (e.g. `www`, `app`) on their own group or host.
 Add `BelongsToOrganization` to scope a model's data per organization:
 
 ```php title="app/Models/Post.php"
-use Rhino\LaravelApi\Traits\BelongsToOrganization;
+use Rhino\Traits\BelongsToOrganization;
 
 class Post extends Model
 {

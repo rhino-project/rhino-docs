@@ -7,6 +7,152 @@ title: Release Notes
 
 Notable changes in each release of Rhino for NestJS, newest first.
 
+## 4.10.0
+
+**Validation moves off the registration and into a request class that can see the whole request.** A
+`validation` / `validationStore` / `validationUpdate` schema is static: it cannot see the current user,
+the organization, the route group or the record being updated, so anything conditional had to go into a
+role-keyed `Record<string, ZodSchema>` resolved behind your back. A model may now register a request
+class per action, each owning the entire shape contract for that action.
+
+```ts title="src/requests/post-store.request.ts"
+import { z } from 'zod';
+import {
+  ResourceRequest,
+  resolveUserRoleSlug,
+  type ResourceRequestContext,
+} from '@rhino-dev/rhino-nestjs';
+
+export class PostStoreRequest extends ResourceRequest {
+  override authorize(ctx: ResourceRequestContext): boolean {
+    return ctx.routeGroup !== 'public';
+  }
+
+  override prepare(input: Record<string, any>): Record<string, any> {
+    return { ...input, title: String(input.title ?? '').trim() };
+  }
+
+  rules(ctx: ResourceRequestContext) {
+    const isAdmin = resolveUserRoleSlug(ctx.user, ctx.organization?.id) === 'admin';
+
+    return z.object({
+      title: z.string().max(255),
+      status: isAdmin ? z.string() : z.literal('draft'),
+      categoryId: z.number().int(),
+    });
+  }
+}
+```
+
+```ts title="src/rhino.config.ts"
+posts: { model: 'post', requests: { store: PostStoreRequest, update: PostUpdateRequest } },
+```
+
+```bash title="terminal"
+curl -X POST '/api/acme/posts' -d '{"title":"","status":"published","categoryId":4}'
+```
+
+```json
+{
+  "code": "VALIDATION_FAILED",
+  "message": "Validation failed",
+  "details": { "errors": { "status": ["Invalid literal value, expected \"draft\""] } }
+}
+```
+
+- **Registration is explicit and per action** — `ModelRegistration.requests?: { store?, update? }`.
+  There is no filesystem discovery, so nothing is ever picked up by accident, and a model may register
+  only `store`. A non-class value is rejected at boot.
+- **The context is a `ResourceRequestContext` argument** — `user`, `organization`, `routeGroup`,
+  `action`, `record`, `input`. `action` is always `'store'` / `'update'`, never `'create'`, even inside
+  `POST /nested`. `record` is the pre-update row from the organization-scoped query the update already
+  performed.
+- **`rules()` and `authorize()` may be async.** The request-class path is a separate async method;
+  `ValidationService.validateForAction` stays synchronous, so nothing on the model-level path changed.
+- **There is no `messages()` and no `after()` hook** — Zod carries messages in the schema, and
+  `.superRefine()` covers cross-field checks.
+- **`prepare()` runs after the policy's forbidden-field gate and before `authorize()`**, so it can never
+  launder a denied field past the policy, and `authorize()` always sees normalized input.
+- **`authorize()` returning false is a `403` byte-identical to a policy denial** —
+  `{"code":"FORBIDDEN","message":"This action is unauthorized."}`, hard-coded.
+- **The parse output is the write payload.** Zod object schemas strip unknown keys, so a field with no
+  rule is dropped, not persisted. Rhino does **not** call `schema.pick()` with the policy's
+  `permittedAttributesForCreate/Update`, and does **not** relax an update — an update class marks its
+  own fields `.optional()`.
+- **`verifyTenantFks` runs on the request class's output**, unchanged, and still answers
+  `422 CROSS_TENANT`.
+- **Nested operations use the same classes**, per operation. The operation's data is reference-resolved
+  before the request class sees it, so `ctx.input` holds real values rather than `$N.field`
+  placeholders, and `NestedExecContext` now carries `routeGroup` so a class sees the same group inside
+  `POST /nested` as it does on the top-level endpoints.
+- **A request class with constructor dependencies must be a provider.** Rhino resolves it through
+  `ModuleRef` and falls back to `new Cls()`, which would leave injected services `undefined`; it now
+  logs a warning when that happens to a class that declares constructor parameters.
+- **The policy's forbidden-field gate was extracted** into `ValidationService.checkForbiddenFields` so
+  both paths share it. `validateForAction` calls it first and is otherwise untouched.
+- **`npx rhino generate` gained a fourth menu entry, `request`**, which asks for store, update or both,
+  writes `src/requests/{name}-{action}.request.ts`, and prints the registration line to paste into
+  `src/rhino.config.ts`.
+- **Blueprint still generates `validation` schemas** into new resource definitions. Generated code keeps
+  working because the model-level path is still supported.
+
+Full documentation: [Validation](./validation).
+
+### Fixes
+
+Four bugs found while verifying the release against a live server, all of which predate 4.10.0:
+
+- **An update whose validated payload is empty returned `404` instead of `200`.** `ResourceService.update`
+  built an `updateMany` with empty `data`, which Prisma reports as `count: 0` — indistinguishable from a
+  missing row. A request class makes this easy to hit, because every field the client sent can legitimately
+  be dropped by the fail-closed write-payload rule. The row is now resolved with the same organization-scoped
+  `where` and returned unchanged. A genuinely missing or cross-tenant row still resolves to `null`, so the
+  `404` for those is unaffected.
+- **`POST /nested` answered `UNKNOWN_RESOURCE: "Unknown resource: nested"`.** `GlobalController` owns the
+  catch-all `/:modelSlug` routes, and Nest registers routes in the order the `controllers` array lists them,
+  so `POST /:modelSlug` was shadowing the literal `POST /nested`. `GlobalController` is now registered last,
+  behind `AuthController`, `InvitationController` and `NestedController`.
+- **Every nested request against a real `PrismaClient` threw `Cannot read properties of undefined (reading '_engineConfig')`.**
+  `PrismaService.$transaction` invoked the client's `$transaction` as a detached reference; a real client reads
+  `this._engineConfig` inside it. It is now called on the client. The in-memory test double is a plain closure,
+  which is why this only ever appeared over HTTP.
+- **SECURITY — `POST /nested` did not tenant-scope indirectly owned models.** See below.
+
+:::danger Security fix: cross-tenant writes through `POST /nested`
+`NestedService` scoped its `update` and `delete` operations — and the request-class `record` lookup — only for
+models with a direct `organizationId`. A model that reaches its organization through an `owner` chain
+(`task → project → organization`) ran with **no tenant filter at all**, so an authenticated member of one
+organization could update or delete another organization's records by id through `POST /nested`. The
+single-record `PUT` and `DELETE` endpoints were never affected; `ResourceService` has always applied the full
+filter.
+
+Nested operations now build the same filter `ResourceService.orgFilter` does:
+
+```ts
+// ❌ Before — only the direct case, so an owner-chained model was unscoped
+if (reg.belongsToOrganization && ctx.organization) where.organizationId = ctx.organization.id;
+
+// ✅ After — the resolved owner path becomes a nested relation filter
+//    task → project → organization  ⇒  { project: { organizationId } }
+const where = { id: op.id, ...this.orgScope(op.model, ctx) };
+```
+
+**Upgrade if you expose `POST /nested` on any model that reaches its organization through `owner` rather than
+a direct `organizationId` column.** A model with no tenant context, or an unresolvable chain, is still
+unscoped — exactly as it is on the single-record endpoints.
+:::
+
+**Backward compatibility.** `validation`, `validationStore` and `validationUpdate`, including the
+role-keyed form, are **deprecated but completely unchanged**, and are used for every model and action
+with no request class. There is no runtime deprecation warning. No route, URL, query parameter, status
+code or error envelope changed — `RhinoException`'s `{code, message, details}` envelope is exactly what
+it was. `rhino-react` is unaffected and needs no upgrade. The deprecated path will be removed in **5.0**.
+
+:::warning Upgrade action: none
+`npm install @rhino-dev/rhino-nestjs@^4.10` and you are done. No config migration, no database change,
+no route change. See [Upgrading — 4.9 → 4.10](./upgrading#4-9-4-10).
+:::
+
 ## 4.9.0
 
 **Computed attributes take arguments, the same way scopes do.** A computed attribute used to be a

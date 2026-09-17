@@ -129,18 +129,14 @@ Create a model (or use the [generator](./generator)):
 
 namespace App\Models;
 
-use Rhino\LaravelApi\Models\RhinoModel;
+use Rhino\Models\RhinoModel;
 
 class Post extends RhinoModel
 {
     protected $fillable = ['title', 'content', 'status', 'user_id'];
 
-    // Validation (format rules — field permissions live in the policy)
-    protected $validationRules = [
-        'title'   => 'string|max:255',
-        'content' => 'string',
-        'status'  => 'string|in:draft,published,archived',
-    ];
+    // Validation lives in app/Http/Requests/PostStoreRequest.php and
+    // PostUpdateRequest.php — see Validation. Field permissions live in the policy.
 
     // Query configuration
     public static $allowedFilters  = ['status', 'user_id'];
@@ -167,8 +163,8 @@ class Post extends RhinoModel
 
 For additional features, add traits manually:
 ```php title="app/Models/Post.php"
-use Rhino\LaravelApi\Traits\HasAuditTrail;
-use Rhino\LaravelApi\Traits\BelongsToOrganization;
+use Rhino\Traits\HasAuditTrail;
+use Rhino\Traits\BelongsToOrganization;
 
 class Post extends RhinoModel
 {
@@ -231,7 +227,7 @@ Every static property below is optional — declare only what differs from the d
 | Property | Purpose |
 |---|---|
 | `$fillable` | Standard Eloquent mass assignment; determines writable fields on `POST`/`PUT` |
-| `$validationRules` / `$validationRulesMessages` | Format rules and custom messages ([Validation](./validation)) |
+| `$validationRules` / `$validationRulesMessages` | **Deprecated**, removed in 5.0 — validation belongs in a request class ([Validation](./validation)) |
 | `$allowedFilters` | Fields usable with `?filter[field]=value` |
 | `$allowedSorts` / `$defaultSort` | Fields usable with `?sort=`, plus the fallback sort |
 | `$allowedSearch` | Fields swept by `?search=` (relations allowed, e.g. `user.name`) |
@@ -313,9 +309,43 @@ Pagination metadata comes back in **headers**, not the body: `X-Current-Page`, `
 
 ### 5. Validation
 
-Format rules live on the model (`$validationRules`, any Laravel rule); **which fields a role may
-write** lives on the policy. A forbidden field is a `403`; a malformed value is a `422` with
-field-level errors. See [Validation](./validation).
+Each model validates `store` and `update` with a **request class** — `App\Http\Requests\{Model}StoreRequest`
+and `{Model}UpdateRequest`, extending `Rhino\Http\Requests\ResourceRequest`, found by convention with no
+registration:
+
+```php title="app/Http/Requests/PostStoreRequest.php"
+class PostStoreRequest extends ResourceRequest
+{
+    public function authorize(): bool { return $this->routeGroup() !== 'public'; }
+
+    public function prepare(array $input): array
+    {
+        // prepare() runs before the rules, so guard the type and leave
+        // anything malformed for them to reject.
+        if (is_string($input['title'] ?? null)) {
+            $input['title'] = trim($input['title']);
+        }
+
+        return $input;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'title'       => 'required|string|max:255',
+            'category_id' => 'required|integer|exists:categories,id',  // org-scoped automatically
+        ];
+    }
+}
+```
+
+Rules can branch on `$this->user()`, `$this->organization()`, `$this->routeGroup()` and — on update —
+`$this->record()`, the row as it was before the write. `authorize()` returning false is a `403`
+indistinguishable from a policy denial; failing rules are a `422` with field-level errors.
+
+**`validated()` is the write payload**: a field with no rule is silently dropped, not saved. **Which
+fields a role may write** still lives on the policy, and a forbidden field is a `403` before the request
+class runs. See [Validation](./validation).
 
 ### 6. Authorization
 
@@ -491,7 +521,7 @@ See the [Generator docs](./generator) for all options.
 | Page | Read it for |
 |---|---|
 | [Models](./models) | Every model property and trait, route keys |
-| [Validation](./validation) | Format rules, field permissions, error shapes |
+| [Validation](./validation) | Request classes, the write payload, field permissions, error shapes |
 | [Querying](./querying) | Filters, sorts, search, includes, fields, named scopes |
 | [Computed Attributes](./computed-attributes) | Derived values and aggregates |
 | [Request Lifecycle](./request-lifecycle) | The seven layers of a request |
@@ -506,6 +536,7 @@ See the [Generator docs](./generator) for all options.
 | [Blueprint](./blueprint) | YAML-driven, deterministic codegen |
 | [Export Types](./export-types) | TypeScript types for the client |
 | [Best Practices](./best-practices/) | The opinionated manual, built on one example app |
+| [Upgrading](./upgrading) | Version-to-version upgrade notes |
 | [Release Notes](./release-notes) | What changed, newest first |
 
 The [React client docs](../react/getting-started) cover the hooks that consume this API.

@@ -115,10 +115,15 @@ For update operations, the `id` field is **required**. A `422` error is returned
 
 ## Validation
 
-Each operation is individually validated. The controller resolves permitted fields from the policy (`permittedAttributesForCreate` or `permittedAttributesForUpdate`) and then runs Zod format validation against the model's registered schema:
+Each operation is individually validated. The policy's permitted fields (`permittedAttributesForCreate` or `permittedAttributesForUpdate`) are checked first, then the operation is validated by the [request class](./validation) registered for its own model and action — `requests.store` for a `create` operation, `requests.update` for an `update`, with `ctx.record` populated by an organization-scoped lookup of the row being updated. `ctx.action` is `'store'` / `'update'`, never `'create'`, and `ctx.routeGroup` is the same group the top-level endpoints see. An operation whose model registers no request class for that action falls back to the model's registered schema.
 
 - Forbidden fields (not in the permitted list) return **403 Forbidden**
 - Format validation failures return **422 Unprocessable Entity**
+- A request class whose `authorize()` returns false rejects the whole batch with **403 Forbidden**
+
+:::note `$N.field` references never reach the request class
+Cross-operation references are resolved **before** validation, so `ctx.input` holds the real value the earlier operation produced, never a `"$0.id"` placeholder.
+:::
 
 Validation errors are prefixed with the operation index for clarity:
 

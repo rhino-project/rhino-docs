@@ -13,131 +13,211 @@ For the models, roles, and route groups referenced here, see the [Best Practices
 `Ticket` (org column `organization_id`) and `TicketComment` (relationship chain `ticket → organization`, **no** org column) are the tenant-group models with a full lifecycle. `Category`, `Plan`, and `Article` are global `app`-group models. Cross-tenant leaks happen in the tenant group — that's where the sharp edges are.
 :::
 
-## Validate format on the model, permissions on the policy
+## Validate in a request class, permit fields in the policy
 
-**Principle:** `$validationRules` is for **type and format** — `string`, `max`, `in`, `date`. *Who* may write each field is a policy concern (`permittedAttributesForCreate` / `permittedAttributesForUpdate`), never a validation rule. Mixing them buries authorization inside format strings where no one audits it.
+**Principle:** a request class owns **type and format** — `required`, `string`, `max`, `in`, `date`. *Who* may write each field is a policy concern (`permittedAttributesForCreate` / `permittedAttributesForUpdate`), never a validation rule. Mixing them buries authorization inside format strings where no one audits it.
 
-The `Ticket` model uses `HasValidation` and declares rules for every writable column:
+`Ticket` is validated by two classes, one per action, found by convention:
 
-```php title="app/Models/Ticket.php"
-use Illuminate\Database\Eloquent\Model;
-use Rhino\LaravelApi\Traits\HasValidation;
-use Rhino\LaravelApi\Traits\HidableColumns;
+```php title="app/Http/Requests/TicketStoreRequest.php"
+<?php
 
-class Ticket extends Model
+namespace App\Http\Requests;
+
+use Rhino\Http\Requests\ResourceRequest;
+
+class TicketStoreRequest extends ResourceRequest
 {
-    use HasValidation, HidableColumns;
+    public function rules(): array
+    {
+        return [
+            'subject'        => 'required|string|max:255',
+            'status'         => 'required|string|in:open,pending,closed',
+            'priority'       => 'required|string|in:low,normal,high,urgent',
+            'category_id'    => 'required|integer|exists:categories,id',
+            'assignee_id'    => ['nullable', 'integer', $this->memberOfThisOrg()],
+            'internal_notes' => 'nullable|string',
+        ];
+    }
 
-    protected $validationRules = [
-        'subject'        => 'required|string|max:255',
-        'status'         => 'string|in:open,pending,closed',
-        'priority'       => 'string|in:low,normal,high,urgent',
-        'category_id'    => 'required|integer',   // FK safety handled below
-        'assignee_id'    => 'nullable|integer',   // FK safety handled below
-        'internal_notes' => 'nullable|string',
-    ];
-
-    protected $validationRulesMessages = [
-        'subject.required' => 'A ticket needs a subject.',
-        'status.in'        => 'Status must be open, pending, or closed.',
-        'priority.in'      => 'Priority must be low, normal, high, or urgent.',
-    ];
+    public function messages(): array
+    {
+        return [
+            'subject.required' => 'A ticket needs a subject.',
+            'status.in'        => 'Status must be open, pending, or closed.',
+            'priority.in'      => 'Priority must be low, normal, high, or urgent.',
+        ];
+    }
 }
 ```
 
-Don't try to gate `internal_notes` (admins/agents only, hidden from viewers) with a validation rule — that's an attribute permission. It belongs on `TicketPolicy` via `permittedAttributesForCreate` and hidden reads via `hiddenAttributesForShow`, both covered in [Authorization](./authorization) and the [Policies](../policies) reference.
+Don't try to gate `internal_notes` (admins and agents only, hidden from viewers) with a validation rule — that's an attribute permission. It belongs on `TicketPolicy` via `permittedAttributesForCreate`, and hidden reads via `hiddenAttributesForShow`, both covered in [Authorization](./authorization) and the [Policies](../policies) reference. The policy's forbidden-field check runs *before* the request class, so by the time `rules()` executes, a viewer's `internal_notes` has already been refused with a `403`.
 
-```php title="app/Models/Ticket.php"
+```php title="app/Http/Requests/TicketStoreRequest.php"
 // ❌ Bad — encoding authorization ("only admins set status") as a format rule.
-// Validation can't see the user's role; this silently lets anyone set any status,
-// and the real rule is invisible to whoever reads the policy.
-protected $validationRules = [
-    'status'         => 'string|in:open,pending,closed',
-    'internal_notes' => 'string', // "we'll just trust the frontend to hide it"
-];
+// The rule can branch on the user, so this LOOKS like it works — but the real
+// access rule is now invisible to whoever reads TicketPolicy, and it only
+// covers the values, not the field: an agent still writes `status`.
+'status' => $this->isAdmin() ? 'required|string' : 'prohibited',
 ```
 
-```php title="app/Models/Ticket.php"
-// ✅ Good — model validates FORMAT; policy decides WHO may write which field.
-// Format lives here; access lives on TicketPolicy::permittedAttributesForCreate().
-protected $validationRules = [
-    'status'         => 'string|in:open,pending,closed',
-    'internal_notes' => 'nullable|string',
-];
+```php title="app/Http/Requests/TicketStoreRequest.php"
+// ✅ Good — the request class validates FORMAT; TicketPolicy decides WHO may
+// write the field, and answers 403 before this class ever runs.
+'status' => 'required|string|in:open,pending,closed',
 ```
 
-:::tip
-Add `$validationRulesMessages` for the rules most likely to fail — `required` and enum `in` rules especially. Frontend developers consume these verbatim.
+:::warning What you validate is what gets written
+The write payload is `validated()` — the keys covered by a rule that passed. A field with no rule is **silently dropped**: the response is `201`/`200` and the column is simply unset. Declare a rule for every field the action should write, even a loose `'nullable'` one. There is no error and no log line to tell you otherwise.
 :::
 
-### Cross-tenant FK safety: scope the `exists`, don't trust the table
+### Role-conditional rules: branch on the user, don't key a map by role
 
-**Principle:** an `exists` rule that points at a whole table validates *existence*, not *ownership*. In a multi-tenant app that is a vulnerability: an attacker in Org A submits `category_id` or `assignee_id` belonging to Org B, and a naive `exists:categories,id` waves it through. Every relational field a tenant can set must be validated **scoped to the current organization**.
+**Principle:** when a rule genuinely differs by role, express it as a branch on `$this->user()` inside the request class. A role-keyed map buries the branch in a data structure that no one greps for, and it silently falls through to the `'*'` entry for any role you forget.
 
-Two flavors in Helpdesk, and they are not the same:
+In Helpdesk, only an `admin` may open a ticket at `urgent`; agents top out at `high`.
 
-- **`category_id` → `Category`.** `Category` is a *global* `app`-group model — every org shares the catalog — so `exists:categories,id` is genuinely fine here. Existence *is* the whole rule.
-- **`assignee_id` → a member of the current org.** This is org-scoped. The assignee must be a `User` who holds a `Membership` in **this** organization. A global `exists:users,id` would let you assign a ticket to a stranger from another company.
+```php title="app/Models/Ticket.php"
+// ❌ Bad — a role-keyed rules map on the model. The role resolution is implicit,
+//          an unlisted role falls through to '*' with no warning, and the rules
+//          cannot see the organization, the route group or the record.
+protected $validationRulesStore = [
+    'admin'  => ['subject' => 'required|string|max:255', 'priority' => 'required|in:low,normal,high,urgent'],
+    'agent'  => ['subject' => 'required|string|max:255', 'priority' => 'required|in:low,normal,high'],
+    '*'      => ['subject' => 'required|string|max:255'],
+];
+```
 
-```php title="app/Http/Requests/... (conceptual)"
-// ❌ Bad — global exists on the users table.
-// Passes for ANY user in the system, including members of other orgs.
-// Org A can assign its ticket to Org B's agent → cross-tenant reference leak.
+```php title="app/Http/Requests/TicketStoreRequest.php"
+// ✅ Good — one class, an explicit branch, and the whole context in scope.
+public function rules(): array
+{
+    return [
+        'subject'  => 'required|string|max:255',
+        'priority' => $this->isAdmin()
+            ? 'required|string|in:low,normal,high,urgent'
+            : 'required|string|in:low,normal,high',
+    ];
+}
+
+protected function isAdmin(): bool
+{
+    // Resolved from the Membership for the organization on the route — never
+    // from anything the client sent. See Authorization.
+    return $this->user()?->getRoleSlugForValidation($this->organization()) === 'admin';
+}
+```
+
+The same branch shape covers the other three context values: `$this->routeGroup()` when the `app` and `tenant` groups want different rules for the same model, `$this->action()` when one class serves both, and `$this->record()` on update — for example, refusing to reopen a ticket that a `viewer` closed.
+
+### `prepare()` is trusted server code — never launder a client value through it
+
+**Principle:** `prepare()` runs *after* the policy's forbidden-field check, which inspects exactly what the client sent. That is what makes it safe — and it is also what makes it dangerous. Anything `prepare()` writes is treated as server-authored and is **not** re-checked against `permittedAttributesForCreate/Update`. Deriving a restricted field from a client value writes a field the policy just denied.
+
+`TicketCommentPolicy` lets every role write `body`, and lets only `admin` and `agent` write `is_internal` — a viewer who sends `is_internal` gets a `403`. A viewer who sends a `body` cannot reach `is_internal` at all… unless `prepare()` does it for them.
+
+```php title="app/Http/Requests/TicketCommentStoreRequest.php"
+// ❌ Bad — is_internal was denied to viewers, so it never appeared in the raw
+//          input and the forbidden-field check passed. prepare() then derives it
+//          from `body`, which the client fully controls. Any viewer can now file
+//          an internal comment by typing "#internal", and TicketCommentPolicy
+//          shows no sign of it.
+public function prepare(array $input): array
+{
+    $input['is_internal'] = str_starts_with($input['body'] ?? '', '#internal');
+
+    return $input;
+}
+```
+
+```php title="app/Http/Requests/TicketCommentStoreRequest.php"
+// ✅ Good — normalize what the client sent, and derive new keys from SERVER
+//           state only. Nothing here is reachable from the request body.
+public function prepare(array $input): array
+{
+    // prepare() runs BEFORE the rules, so `body` is still whatever the client
+    // sent. Guard the type; let the rules reject anything that isn't a string.
+    if (is_string($input['body'] ?? null)) {
+        $input['body'] = trim($input['body']);
+    }
+
+    $input['user_id'] = $this->user()?->id;   // the author is who is asking, always
+
+    return $input;
+}
+```
+
+The test to apply to every line of a `prepare()`: **could a client change this value by changing the request body?** If the answer is yes for a key the policy restricts, it is a laundering bug. `organization_id` is the one key you never have to worry about — Rhino applies it last and unconditionally, so it always wins.
+
+:::note A key `prepare()` adds still needs a rule
+`user_id` above is dropped unless `rules()` also declares it (`'user_id' => 'required|integer'`). The fail-closed write-payload rule applies to server-authored fields exactly as it does to client-sent ones.
+:::
+
+### Cross-tenant FK safety: let Rhino scope the `exists`, and scope the rest yourself
+
+**Principle:** an `exists` rule that points at a whole table validates *existence*, not *ownership*. In a multi-tenant app that is a vulnerability: an agent in Org A submits a `category_id` or `assignee_id` belonging to Org B and a naive `exists:categories,id` waves it through.
+
+Rhino handles most of this for you. In a tenant context it rewrites every `exists:` rule in a request class so the referenced row must belong to the organization on the route — directly when the table carries `organization_id`, and through a walked foreign-key chain when it reaches its organization by relationship, as `ticket_comments → tickets → organizations` does. Three flavors show up in Helpdesk, and they are not the same:
+
+- **`category_id` → `Category`.** `Category` is a *global* `app`-group model — every org shares the catalog — so `exists:categories,id` is genuinely correct. Existence *is* the whole rule, and Rhino leaves it alone because there is no path from `categories` to an organization.
+- **`ticket_id` → `Ticket`.** Org-scoped by column. Write `exists:tickets,id` and Rhino appends the organization itself.
+- **`assignee_id` → a member of the current org.** This one Rhino **cannot** infer: the assignee is a `User`, and `users` is a global table with no path to an organization. The real constraint lives in the `memberships` pivot, and you have to say so.
+
+```php title="app/Http/Requests/TicketStoreRequest.php"
+// ❌ Bad — hand-rolled scoping on a table Rhino already scopes. It is redundant
+//          for tickets, and on an indirectly-owned table like ticket_comments
+//          there is no organization_id column to match on at all, so the rule
+//          silently matches nothing — or, worse, is written the other way round
+//          and matches everything.
+'ticket_id' => 'required|integer|exists:tickets,id,organization_id,' . $this->organization()->id,
+
+// ❌ Bad — a bare exists on users. Passes for ANY user in the system, including
+//          members of other orgs: Org A assigns its ticket to Org B's agent.
 'assignee_id' => 'nullable|integer|exists:users,id',
 ```
 
-```php title="app/Models/Ticket.php"
-// ✅ Good — scope the exists to memberships of the CURRENT organization.
-// The row must be a user who is a member of the org resolved from the route.
+```php title="app/Http/Requests/TicketStoreRequest.php"
+// ✅ Good — plain rules for the tables Rhino can scope...
+'category_id' => 'required|integer|exists:categories,id',   // global catalog: existence IS the rule
+'ticket_id'   => 'required|integer|exists:tickets,id',      // org-scoped by Rhino, automatically
+
+// ...and an explicit membership rule for the one it cannot.
+'assignee_id' => ['nullable', 'integer', $this->memberOfThisOrg()],
+```
+
+```php title="app/Http/Requests/TicketStoreRequest.php"
+// ✅ Good — the organization comes from the request context, never from input.
+// Outside a tenant group organization() is null, so fall back to plain existence
+// rather than building a rule that matches nothing.
 use Illuminate\Validation\Rule;
 
-// Static type/format rules live on the property Rhino reads automatically.
-protected $validationRules = [
-    'subject'  => 'required|string|max:255',
-    'status'   => 'string|in:open,pending,closed',
-    'priority' => 'string|in:low,normal,high,urgent',
-
-    // Category is a GLOBAL catalog model — plain existence is the correct rule.
-    'category_id' => 'required|integer|exists:categories,id',
-];
-
-// The scoped assignee rule needs request context, so add it in the runtime
-// hooks HasValidation calls on store/update. The resolved Organization model
-// lives on the request attribute bag (request()->get('organization')), set by
-// Rhino's tenant middleware — NOT on the route parameter, which is the raw slug.
-public function validateStore(array $data): void
+protected function memberOfThisOrg(): mixed
 {
-    $this->validateAssignee($data);
-    parent::validateStore($data);
-}
+    $organizationId = $this->organization()?->id;
 
-public function validateUpdate(array $data): void
-{
-    $this->validateAssignee($data);
-    parent::validateUpdate($data);
-}
-
-protected function validateAssignee(array $data): void
-{
-    $organizationId = request()->get('organization')?->id;
-
-    validator($data, [
-        // Assignee MUST be a member of THIS org. Scope the exists to memberships.
-        'assignee_id' => [
-            'nullable', 'integer',
-            Rule::exists('memberships', 'user_id')
-                ->where('organization_id', $organizationId),
-        ],
-    ])->validate();
+    return $organizationId === null
+        ? 'exists:users,id'
+        : Rule::exists('memberships', 'user_id')->where('organization_id', $organizationId);
 }
 ```
 
-:::warning A global `exists` is a cross-tenant hole
-`exists:tickets,id`, `exists:users,id`, `exists:ticket_comments,id` — any bare `exists` on a *tenant-scoped* table lets a request reference another org's row. Always constrain the rule with `->where('organization_id', …)` (or the relationship-chain equivalent), or resolve the FK through an already-scoped query. Global models like `Category`/`Plan`/`Article` are the *only* tables where a bare `exists` is safe.
+:::danger A bare `exists` on a tenant-scoped table is a cross-tenant hole
+Rhino's rewriting covers the tables it can reach — directly or through a foreign-key chain. It covers nothing for a table with **no path to an organization**, which is exactly the shape `users` has in Helpdesk. For those, constrain the rule yourself against the pivot that carries the org, using `$this->organization()`.
+
+```php
+// ❌ Bad — every org can assign to every user in the system
+'assignee_id' => 'nullable|integer|exists:users,id',
+
+// ✅ Good — the row must be a member of the org resolved from the route
+'assignee_id' => ['nullable', 'integer',
+    Rule::exists('memberships', 'user_id')->where('organization_id', $this->organization()?->id)],
+```
 :::
 
+A cross-tenant reference comes back as an ordinary `422`, indistinguishable from a typo'd id — which is the point: it leaks nothing about what exists in the other organization.
+
 :::tip
-Rhino applies the static `$validationRules` property automatically on `store`/`update` via `HasValidation` — you never call a validator yourself. When a rule needs request context (like the resolved organization), the property can't hold it, so build that rule inside the `validateStore()` / `validateUpdate()` hooks `HasValidation` calls at runtime. There the scoped `Rule::exists` is rebuilt per request instead of frozen at boot.
+`php artisan rhino:generate` → **Request** scaffolds both classes with every hook commented, including the org-scoped `exists:` note and a record-dependent rule. Start from the stub rather than an empty file — it is the cheapest defense against the fail-closed write-payload rule. Full reference: [Validation](../validation).
 :::
 
 ## Soft deletes: trash, don't destroy — and stay scoped
@@ -240,7 +320,7 @@ public function viewTrashed(?Authenticatable $user): bool
 **Principle:** "who set this ticket to `closed`, and what was it before?" should never be unanswerable. Add `HasAuditTrail` to `Ticket` and every create/update/delete/restore/force-delete is logged automatically with the acting `user_id`, `organization_id`, IP, and the **changed fields only** (old → new). No manual logging calls.
 
 ```php title="app/Models/Ticket.php"
-use Rhino\LaravelApi\Traits\HasAuditTrail;
+use Rhino\Traits\HasAuditTrail;
 
 class Ticket extends Model
 {
@@ -380,8 +460,10 @@ The parent-plus-first-child pattern (ticket + opening comment) is the right fit.
 
 ## Lifecycle checklist
 
-- **Validate format on the model, permissions on the policy.** `$validationRules` is types and constraints; `permittedAttributes*` is who-can-write.
-- **Never use a bare `exists` on a tenant-scoped table.** Scope `assignee_id` to `memberships` of the current org; a global `exists:users,id` is a cross-tenant hole. Bare `exists` is only safe on global models like `Category`.
+- **Validate format in a request class, permissions in the policy.** `{Model}StoreRequest` / `{Model}UpdateRequest` own types and constraints; `permittedAttributes*` is who-can-write.
+- **Declare a rule for every field the action writes.** `validated()` is the write payload — a field with no rule is silently dropped, with no error.
+- **Branch on `$this->user()`, don't key a rules map by role.** And never derive a policy-restricted field from a client value inside `prepare()`.
+- **Never use a bare `exists` on a table with no path to an organization.** Rhino scopes `exists:` for tables it can reach; `users` it cannot — scope `assignee_id` to `memberships` of the current org yourself. Bare `exists` is only correct on global models like `Category`.
 - **Soft-delete tickets; gate `force-delete` behind `admin`.** Trash and restore are recoverable; permanent deletion is not.
 - **Trash stays tenant-scoped.** Never build a trashed list with an unscoped `withTrashed()` — let Rhino's org scope filter it like `index`.
 - **`HasAuditTrail`, not hand-rolled logs.** Automatic old→new diffs on every event; `$auditExclude` keeps `internal_notes` out.

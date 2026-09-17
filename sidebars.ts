@@ -41,6 +41,7 @@ const sidebars: SidebarsConfig = {
         'laravel/best-practices/codegen',
       ],
     },
+    'laravel/upgrading',
     'laravel/release-notes',
   ],
   railsSidebar: [
@@ -67,6 +68,7 @@ const sidebars: SidebarsConfig = {
         'rails/export-types',
       ],
     },
+    'rails/upgrading',
     'rails/release-notes',
   ],
   nestjsSidebar: [
@@ -95,6 +97,7 @@ const sidebars: SidebarsConfig = {
         'nestjs/export-types',
       ],
     },
+    'nestjs/upgrading',
     'nestjs/release-notes',
   ],
   reactSidebar: [

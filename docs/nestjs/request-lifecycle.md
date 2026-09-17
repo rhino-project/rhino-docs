@@ -115,16 +115,24 @@ This step (plus any always-on `scopes: [...]` classes) is the **enforced** scope
 
 ### 8. Validation
 
-For `store` and `update` actions, the controller resolves permitted fields from the policy (`permittedAttributesForCreate` or `permittedAttributesForUpdate`), checks for forbidden fields (returns 403), then runs Zod validation against the registration's schema (`validation` / `validationStore` / `validationUpdate`). If validation fails, a 422 response is returned with the error details:
+For `store` and `update` actions, the controller resolves permitted fields from the policy (`permittedAttributesForCreate` or `permittedAttributesForUpdate`) and checks the raw input for forbidden fields (returns 403). It then runs the [request class](./validation) registered for that action — `prepare()` → `authorize()` → `rules()` → `safeParse` — and the parse output becomes the write payload. A model with no request class for that action falls back to the deprecated registration schemas.
+
+An `authorize()` that returns false is a 403 identical to a policy denial. A failed parse is a 422:
 
 ```json title="Response"
 {
-  "errors": {
-    "title": ["The title field is required."],
-    "content": ["The content field must be a string."]
+  "code": "VALIDATION_FAILED",
+  "message": "Validation failed",
+  "details": {
+    "errors": {
+      "title": ["Required"],
+      "content": ["Expected string, received number"]
+    }
   }
 }
 ```
+
+The cross-tenant foreign-key check (`fkConstraints`) runs on the resulting payload and answers 422 `CROSS_TENANT`.
 
 ### 9. Query Execution
 

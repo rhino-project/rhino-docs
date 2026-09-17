@@ -74,9 +74,9 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Contracts\Auth\Authenticatable;
-use Rhino\LaravelApi\Models\RhinoModel;
-use Rhino\LaravelApi\Traits\HasAuditTrail;
-use Rhino\LaravelApi\Traits\BelongsToOrganization;
+use Rhino\Models\RhinoModel;
+use Rhino\Traits\HasAuditTrail;
+use Rhino\Traits\BelongsToOrganization;
 
 class Ticket extends RhinoModel
 {
