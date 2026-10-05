@@ -12,7 +12,7 @@ Rhino provides a complete authentication and organization management flow for Re
 
 ## useAuth()
 
-The primary hook for authentication state and actions. It reads the API token from `localStorage`, exposes login/logout functions, and manages the active organization.
+The primary hook for authentication state and actions. It reads the API token from [`storage`](./utilities#storage) (`localStorage` on web, AsyncStorage on React Native), exposes login/logout functions, and manages the active organization.
 
 ```tsx title="src/hooks/useAuth.ts"
 const { token, isAuthenticated, login, logout, setOrganization, setRouteGroup } = useAuth();
@@ -22,11 +22,11 @@ const { token, isAuthenticated, login, logout, setOrganization, setRouteGroup } 
 
 | Property | Type | Description |
 |---|---|---|
-| `token` | `string \| null` | Current API token stored in `localStorage`. `null` when not authenticated. |
-| `isAuthenticated` | `boolean` | `true` if a token exists, `false` otherwise. |
-| `login(email, password, options?)` | `(email: string, password: string, options?: { routeGroup?: string \| null }) => Promise<LoginResult>` | Authenticates the user and stores the returned token. Accepts an optional per-call `routeGroup` (see [Group-Aware Auth](#group-aware-auth)). |
-| `logout(options?)` | `(options?: { routeGroup?: string \| null }) => void` | Clears the token (and persisted organization/route group) from storage and redirects to the home page. |
-| `setOrganization(slug)` | `(slug: string) => void` | Persists the given organization slug in `localStorage` for subsequent API requests. |
+| `token` | `string \| null` | Current API token held in storage. `null` when not authenticated. |
+| `isAuthenticated` | `boolean` | `true` if a token exists, `false` otherwise. Follows sessions started by [`useRegister`](#group-aware-action-hooks) and ended by a [401 response](#handling-403-vs-401). |
+| `login(email, password, options?)` | `(email: string, password: string, options?: { routeGroup?: string \| null }) => Promise<LoginResult>` | Authenticates the user and writes the returned token to storage before resolving. Accepts an optional per-call `routeGroup` (see [Group-Aware Auth](#group-aware-auth)). |
+| `logout(options?)` | `(options?: { routeGroup?: string \| null }) => Promise<void>` | Calls the logout endpoint, then clears the token, user, persisted organization and route group from storage -- even if the request fails. It does not navigate; react to `isAuthenticated` turning `false`. |
+| `setOrganization(slug)` | `(slug: string) => void` | Persists the given organization slug in storage for subsequent API requests. |
 | `setRouteGroup(group)` | `(group: string \| null) => void` | Persists (or clears, when falsy) the active route group and notifies listeners. See [Group-Aware Auth](#group-aware-auth). |
 
 ### LoginResult Type
@@ -40,7 +40,9 @@ interface LoginResult {
   organization?: { slug: string };
   organization_slug?: string;
   route_group?: string | null;
+  token?: string | null;
   error?: string;
+  status?: number;
 }
 ```
 
@@ -49,19 +51,42 @@ interface LoginResult {
 - **`organization`** -- The user's default organization object, including its `slug`.
 - **`organization_slug`** -- Shorthand for the organization slug (convenience field).
 - **`route_group`** -- The route group this login resolved to (the value the backend echoes back, or the group you logged in with). `null` for the default/global auth path. See [Group-Aware Auth](#group-aware-auth).
+- **`token`** -- The bearer token of the session that was started. It is already in storage when `login()` resolves.
 - **`error`** -- An error message string when `success` is `false`.
+- **`status`** -- The HTTP status of the login response. On failure it tells wrong credentials (`401`) from a denied group membership (`403`).
 
 ### Auth Flow
 
 1. User calls `login(email, password)`
 2. Rhino sends `POST /api/auth/login` to your backend
 3. Server returns a token, user data, and organization slug
-4. The client stores the token in `localStorage`
+4. The client writes the token, user and organization to storage **before `login()` resolves**
 5. All subsequent API requests include the `Authorization: Bearer {token}` header automatically
-6. On a `401` response, the token is cleared and the user is redirected to login
+6. On a `401` response from any other request, the session ends: the token and user are removed from storage, `AuthProvider` resets, and `onUnauthorized` runs (see [Handling 403 vs 401](#handling-403-vs-401))
+
+Because the token is stored before the promise resolves, a request issued right after `await login()` is already authenticated -- you do not need to wait for a re-render:
+
+```tsx title="src/screens/LoginScreen.tsx"
+import { useQueryClient } from '@tanstack/react-query';
+import { useAuth, modelKeys, fetchModelIndex } from '@rhino-dev/rhino-react';
+
+const { login } = useAuth();
+const queryClient = useQueryClient();
+
+const result = await login(email, password);
+if (result.success) {
+  // Authorization: Bearer {result.token} is already attached
+  await queryClient.prefetchQuery({
+    queryKey: modelKeys.index('trips', {}),
+    queryFn: () => fetchModelIndex('trips'),
+  });
+}
+```
+
+A rejected login does not end a session. A `401` from `/auth/login` (or `/{routeGroup}/auth/login`) leaves storage alone and does not call `onUnauthorized`; `login()` returns `{ success: false, status: 401, error }` for you to show.
 
 :::info
-The token is persisted in `localStorage`, so authentication survives page refreshes. Call `logout()` to explicitly clear it.
+The token is persisted in storage, so authentication survives page refreshes (and app restarts on React Native). Call `logout()` to explicitly clear it.
 :::
 
 ### Login Component Example
@@ -228,7 +253,7 @@ function LogoutButton() {
 </Tabs>
 
 :::tip
-`logout()` clears the token **and** redirects to the home page (`/`). If you need custom redirect behavior, clear the token manually and handle navigation yourself.
+`logout()` clears the session but does not navigate. Route on `isAuthenticated` -- a protected-route wrapper on web, a conditional navigator on React Native -- and the user lands on your login screen when it turns `false`.
 :::
 
 ---
@@ -315,8 +340,11 @@ The two responses mean different things and are handled differently:
 
 | Status | Meaning | Client behavior |
 |---|---|---|
-| **401 Unauthorized** | Missing/expired token | Token is **cleared**; `onUnauthorized` runs (default: redirect to `/`). |
+| **401 Unauthorized** (any request except login) | Missing/expired token | `token` and `user` are **removed** from storage; `AuthProvider` resets (`isAuthenticated: false`, `token: null`); then `onUnauthorized` runs (default on web: redirect to `/`). |
+| **401 Unauthorized** (from `/auth/login` or `/{routeGroup}/auth/login`) | Wrong credentials | Nothing is cleared and `onUnauthorized` does **not** run; `login()` returns `{ success: false, status: 401 }`. |
 | **403 Forbidden** | Authenticated, but **not a member** of the requested route group (membership denial, when the backend has `enforce_group_membership` on) | Token is **kept**; `onForbidden(error)` runs so you can surface the denial without logging the user out. |
+
+`AuthProvider` learns about the 401 through the `'token'` event on the [`events`](./utilities#events) adapter, so every component reading `useAuth()` re-renders logged out. Navigation that follows `isAuthenticated` needs no extra wiring, and there is no need to mirror auth state in your own store.
 
 ```tsx
 configureApi({
@@ -353,33 +381,87 @@ const reset = useResetPassword();
 await reset.mutateAsync({ token, email, password, password_confirmation });
 ```
 
-`useRegister` persists the `route_group` the backend echoes back (like a
-group-aware `login`), so `useRouteGroup()` is populated after an
-invitation-accept registration.
+A successful `useRegister` starts a session exactly like `login()`: the token,
+user and organization the backend returns are written to storage before the
+mutation resolves, and `AuthProvider` becomes authenticated. A request issued
+right after `await register.mutateAsync(...)` carries the bearer token. If the
+response has no `token`, the session is left untouched. `useRegister` also
+persists the `route_group` the backend echoes back (like a group-aware `login`),
+so `useRouteGroup()` is populated after an invitation-accept registration.
 
-:::tip Path-prefix vs. subdomain multi-tenancy (`tenancy`)
-The CRUD/query hooks (`useModelIndex`, `useModelShow`, …) build org-scoped URLs
-according to the `tenancy` option, set via `configureApi({ tenancy })` or
-`<AuthProvider tenancy="…">`:
+`useAcceptInvitation` does **not** start a session -- the accept endpoint issues
+no token. See [Invitations](./invitations).
 
-- **`tenancy: 'path'`** (default) — path-prefix multi-tenancy. With an org set via
-  [`setOrganization()`](#useorganization), hooks build `/api/{organization}/{model}`.
-- **`tenancy: 'subdomain'`** — domain/subdomain-based groups (e.g.
-  `{organization}.agency.example.com`). The org is carried by the **host**, so the
-  hooks build `/api/{model}` with no org segment. You may still `setOrganization`
-  for display/filtering — it just isn't prepended to the path.
+---
 
-`routeGroup` affects only auth URLs, never data URLs.
+## Tenancy and Data URLs
+
+Auth URLs follow `routeGroup`. Data URLs -- every CRUD and query hook -- follow
+two more options: `tenancy`, which says whether the organization is a path
+segment, and `routeGroupInDataPath`, which puts the route group in front of it.
+
+```tsx title="src/config.ts"
+import { configureApi } from '@rhino-dev/rhino-react';
+
+// A driver app talking to a prefix route group with no tenant
+configureApi({
+  baseURL: 'https://api.example.com/api',
+  tenancy: 'none',
+  routeGroup: 'driver',
+  routeGroupInDataPath: true,
+});
+// useModelIndex('trips') -> GET /api/driver/trips
+// login()                -> POST /api/driver/auth/login
+```
+
+| Option | Values | Effect on data URLs |
+|---|---|---|
+| `tenancy` | `'path'` (default) | The organization is a path segment: `/{organization}/{model}`. An organization is required. |
+| | `'subdomain'` | The organization is carried by the **host** (`{organization}.example.com`): `/{model}`. No organization is required; you may still `setOrganization` for display. |
+| | `'none'` | There is no organization: `/{model}`. No organization is required, and a stored one is ignored. |
+| `routeGroupInDataPath` | `false` (default) | The route group shapes auth URLs only. |
+| | `true` | The configured `routeGroup` is prepended to data URLs. |
+
+Set `tenancy` with `configureApi({ tenancy })` or `<AuthProvider tenancy="…">`
+(which accepts the same three values). The resulting URLs, with a base URL of
+`/api`:
+
+| Setup | Configuration | `useModelIndex('trips')` |
+|---|---|---|
+| Path tenancy (default) | -- | `/api/{organization}/trips` |
+| Subdomain tenancy | `tenancy: 'subdomain'` | `/api/trips` on `{organization}.example.com` |
+| No tenancy | `tenancy: 'none'` | `/api/trips` |
+| Prefix group, no organization | `tenancy: 'none', routeGroup: 'driver', routeGroupInDataPath: true` | `/api/driver/trips` |
+| Prefix group with organization | `tenancy: 'path', routeGroup: 'client', routeGroupInDataPath: true` | `/api/client/{organization}/trips` |
+| Prefix group on a subdomain tenant | `tenancy: 'subdomain', routeGroup: 'driver', routeGroupInDataPath: true` | `/api/driver/trips` on the tenant host |
+
+The same base applies to every data hook: index, show (`/{id}`), computed
+(`/computed`), trashed (`/trashed`), restore (`/{id}/restore`), force delete
+(`/{id}/force-delete`), audit (`/{id}/audit`), nested operations
+(`/nested`) and `useModelInfinite`. `routeGroupInDataPath` has no
+effect without a `routeGroup`, and it never changes auth URLs.
+
+**Tenant-only hooks.** Organizations, roles and invitations belong to an
+organization, so `useOwner`, `useOrganizationExists`, `useUserRole`,
+`useInvitations`, `useInviteUser`, `useResendInvitation` and `useCancelInvitation`
+always carry the organization segment, whatever the `tenancy` -- prefixed with the
+route group when `routeGroupInDataPath` is on
+(`/api/client/{organization}/invitations`). Without an organization they request
+nothing. `useAcceptInvitation` always posts to the fixed `/api/invitations/accept`.
+
+:::tip The matching server setup
+`tenancy: 'none'` with `routeGroupInDataPath: true` talks to a **prefix route group
+with no tenant boundary** -- on Laravel, a group declared `'tenant' => false` in
+`config/rhino.php`. See the server's
+[Multi-Tenancy -- Route Groups Without a Tenant Boundary](../laravel/multi-tenancy#route-groups-without-a-tenant-boundary)
+and [Route Groups](../laravel/route-groups).
 :::
 
 ---
 
 ## useOrganization()
 
-Returns the current organization slug. The hook resolves the slug using the following priority:
-
-1. **URL params** -- Looks for an `:organization` param in a `/orgs/:organization/*` route pattern.
-2. **localStorage fallback** -- Falls back to the `organization_slug` key in `localStorage`.
+Returns the current organization slug -- the `organization_slug` key in [`storage`](./utilities#storage) -- and re-renders when it changes through `setOrganization()` (across tabs on web, in-memory on React Native).
 
 ```tsx title="src/hooks/useOrganization.ts"
 import { useOrganization } from '@rhino-dev/rhino-react';
@@ -390,22 +472,10 @@ const organization = useOrganization();
 
 ### How It Works
 
-The organization slug is automatically included in all API requests made by Rhino hooks. You do not need to pass it manually to CRUD or query hooks.
-
-### Example with Route
-
-```tsx title="src/hooks/useOrganization.ts"
-// URL: /orgs/acme-corp/dashboard
-const org = useOrganization(); // 'acme-corp'
-```
-
-```tsx title="src/hooks/useOrganization.ts"
-// URL: /orgs/my-startup/settings
-const org = useOrganization(); // 'my-startup'
-```
+The organization slug is automatically included in all API requests made by Rhino hooks in the default `'path'` [tenancy](#tenancy-and-data-urls). You do not need to pass it manually to CRUD or query hooks. `login()` stores the first organization the backend returns; switch it with `setOrganization(slug)`.
 
 :::info
-When using React Router, make sure your routes follow the `/orgs/:organization/*` pattern so that `useOrganization` can extract the slug from the URL automatically.
+The hook does not read the URL. If your routes carry the organization (e.g. `/orgs/:organization/*`), call `setOrganization(params.organization)` when the route changes so the hooks follow it.
 :::
 
 ---

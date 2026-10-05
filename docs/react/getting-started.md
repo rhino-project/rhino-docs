@@ -41,16 +41,15 @@ configureApi({
 ```
 
 :::tip React Native
-For React Native, you can add a custom unauthorized handler:
+A React Native app authenticates with a bearer token, so turn cookies off and set a timeout:
 ```tsx title="src/config.ts"
 configureApi({
   baseURL: 'https://api.yourapp.com/api',
-  onUnauthorized: () => {
-    // Navigate to login screen
-    navigation.navigate('Login');
-  },
+  withCredentials: false,
+  timeout: 20_000,
 });
 ```
+It also calls `await initStorage()` once before rendering. See [React Native](../react-native/getting-started).
 :::
 
 ### 2. Wrap your app with providers
@@ -118,11 +117,16 @@ auth state to the tree.
 | Option | Purpose |
 |---|---|
 | `baseURL` | Where the API lives |
-| `tenancy` | `'path'` (default) builds `/api/{organization}/{model}`; `'subdomain'` builds `/api/{model}` and lets the host carry the org |
-| `onUnauthorized` | Called on a 401 — navigate to login (essential on React Native) |
-| `routeGroup` | Default group for auth URLs (`/{group}/auth/*`); never affects data URLs |
+| `tenancy` | `'path'` (default) builds `/api/{organization}/{model}`; `'subdomain'` builds `/api/{model}` and lets the host carry the org; `'none'` builds `/api/{model}` with no organization at all |
+| `routeGroup` | Default group for auth URLs (`/{group}/auth/*`) |
+| `routeGroupInDataPath` | Also prefix data URLs with the route group: `/api/{group}/{model}` or `/api/{group}/{organization}/{model}` |
+| `timeout` / `withCredentials` | Request timeout (default none) and cookies (default `true`; React Native uses `false`) |
+| `onUnauthorized` | Called on a 401 from any request except login, after the session is cleared and `AuthProvider` has reset |
+| `onForbidden` | Called on a 403; the token is kept |
+| `storage` | A custom synchronous storage adapter (secure store, Electron) |
 
-See [Utilities](./utilities) and [Authentication — Group-Aware Auth](./authentication#group-aware-auth).
+See [Utilities](./utilities), [Authentication — Tenancy and Data URLs](./authentication#tenancy-and-data-urls)
+and [Authentication — Group-Aware Auth](./authentication#group-aware-auth).
 
 ### 2. Query options
 
@@ -140,6 +144,11 @@ parameters. Full reference: [Querying](./querying).
 | `computedAttributes` | `?computed_attributes=` — opt-in per-record derived values; an object selects attributes that declare parameters |
 | `page` / `perPage` | `?page=` / `?per_page=` |
 
+Every model hook also takes TanStack Query options as its last argument: `queryOptions` on the query hooks
+(`refetchInterval`, `enabled`, `select`, `staleTime`, …) and `mutationOptions` on the mutation hooks
+(`onSuccess`, `onError`, `onMutate`, …). They never change the URL or the cache key; `enabled` can only
+narrow the hook's own guard. See [CRUD Hooks — TanStack Query Options](./crud-hooks#tanstack-query-options).
+
 ### 3. Response shape
 
 Pagination comes from response **headers**, and every list hook parses it for you:
@@ -150,10 +159,16 @@ response?.data;       // the records
 response?.pagination; // { currentPage, lastPage, perPage, total }
 ```
 
+For accumulating pages ("load more", infinite scroll), `useModelInfinite` returns
+`data.pages` plus `fetchNextPage` / `hasNextPage`, driven by the same headers. See
+[Querying — Infinite Scroll](./querying#infinite-scroll).
+
 ### 4. Cache behavior
 
 Mutations invalidate the queries they affect automatically — a `useModelStore('posts')` success
-refreshes every `useModelIndex('posts')` in the tree. Cache keys embed the `id` you pass, so for models
+refreshes every `useModelIndex('posts')` and `useModelInfinite('posts')` in the tree. To invalidate or
+prefetch from outside a component, `modelKeys` returns the hooks' exact keys and `fetchModelIndex` /
+`fetchModelShow` make their requests (see [Utilities — Outside React](./utilities#outside-react)). Cache keys embed the `id` you pass, so for models
 with a server-side [route key](../laravel/models#route-key) use the route-key value consistently across
 index, show and mutations. See [CRUD Hooks — Automatic Cache Invalidation](./crud-hooks#automatic-cache-invalidation).
 
@@ -161,7 +176,7 @@ index, show and mutations. See [CRUD Hooks — Automatic Cache Invalidation](./c
 
 | Status | Means | Where it comes from |
 |---|---|---|
-| `401` | Not authenticated | Auth middleware; triggers `onUnauthorized` |
+| `401` | Not authenticated | Auth middleware; clears `token` and `user`, resets `AuthProvider`, triggers `onUnauthorized` — except on login, where `login()` returns `{ success: false, status: 401 }` |
 | `403` | Not permitted — an action, an `?include=`, a scope, or a field you may not write | Server policies |
 | `404` | Missing record, or an organization you don't belong to | Tenant resolution |
 | `422` | Validation failed, with field-level `errors` | Server validation |
@@ -170,9 +185,23 @@ See [CRUD Hooks — Error Handling](./crud-hooks#error-handling).
 
 ### 6. Platforms
 
-The same hooks run on web, React Native and Electron. `storage` adapts to `localStorage` /
-`AsyncStorage`, and a custom adapter covers Electron's main-process store. See
+The same package and the same hooks run on web, React Native (bare or Expo) and Electron. `storage`
+adapts to `localStorage` / `AsyncStorage` — on React Native, `await initStorage()` once before
+rendering — and a custom adapter covers a secure store or Electron's main-process store. See
 [React Native](../react-native/getting-started) and [Desktop / Electron](./desktop-electron).
+
+### 7. Sessions
+
+`login()` writes the token to storage before it resolves, so the next request is authenticated;
+`LoginResult.token` exposes it. `useRegister` starts a session the same way. A 401 ends it everywhere:
+storage is cleared and `useAuth().isAuthenticated` turns `false`, so navigation that follows
+`isAuthenticated` needs no extra wiring. See [Authentication — Auth Flow](./authentication#auth-flow).
+
+### 8. File uploads
+
+Pass a `FormData` to `useModelStore` or `useModelUpdate` to upload files: a store is a multipart
+`POST`, an update is a multipart `POST {url}/{id}` with an `X-HTTP-Method-Override: PUT` header. See
+[CRUD Hooks — File Uploads](./crud-hooks#file-uploads).
 
 ---
 
@@ -184,7 +213,7 @@ The same hooks run on web, React Native and Electron. `storage` adapts to `local
 |------|-------------|
 | `useAuth()` | Login, logout, token, auth state, `setOrganization`, `setRouteGroup` |
 | `useRouteGroup()` | The active route group (populated after a group-aware login or register) |
-| `useRegister()` | Register via an invitation token |
+| `useRegister()` | Register via an invitation token; starts a session when the backend returns a token |
 | `usePasswordRecover()` | Request a password reset email |
 | `useResetPassword()` | Complete a password reset |
 | `useOrganization()` | Get current organization slug |
@@ -195,27 +224,28 @@ The same hooks run on web, React Native and Electron. `storage` adapts to `local
 
 | Hook | Description |
 |------|-------------|
-| `useModelIndex(model, options)` | List records with filters, sorts, search, scopes, pagination |
-| `useModelShow(model, id, options)` | Fetch single record by ID (or route key) |
-| `useModelStore(model)` | Create a new record |
-| `useModelUpdate(model)` | Update an existing record |
-| `useModelDelete(model)` | Soft delete a record |
+| `useModelIndex(model, options?, queryOptions?)` | List records with filters, sorts, search, scopes, pagination |
+| `useModelInfinite(model, options?, queryOptions?)` | Accumulate pages for "load more" / infinite scroll |
+| `useModelShow(model, id, options?, queryOptions?)` | Fetch single record by ID (or route key) |
+| `useModelStore(model, mutationOptions?)` | Create a new record (JSON or `FormData`) |
+| `useModelUpdate(model, mutationOptions?)` | Update an existing record (JSON or `FormData`) |
+| `useModelDelete(model, mutationOptions?)` | Soft delete a record |
 
 ### Soft Deletes
 
 | Hook | Description |
 |------|-------------|
-| `useModelTrashed(model, options)` | List soft-deleted records |
-| `useModelRestore(model)` | Restore a soft-deleted record |
-| `useModelForceDelete(model)` | Permanently delete a record |
+| `useModelTrashed(model, options?, queryOptions?)` | List soft-deleted records |
+| `useModelRestore(model, mutationOptions?)` | Restore a soft-deleted record |
+| `useModelForceDelete(model, mutationOptions?)` | Permanently delete a record |
 
 ### Advanced
 
 | Hook | Description |
 |------|-------------|
-| `useModelComputedAttributes(model, options)` | Collection-level aggregates from `GET /{model}/computed` |
-| `useModelAudit(model, id, options)` | Fetch audit trail for a record |
-| `useNestedOperations()` | Atomic multi-model transactions |
+| `useModelComputedAttributes(model, options?, queryOptions?)` | Collection-level aggregates from `GET /{model}/computed` |
+| `useModelAudit(model, id, options?, queryOptions?)` | Fetch audit trail for a record |
+| `useNestedOperations(mutationOptions?)` | Atomic multi-model transactions |
 
 ### Invitations
 
@@ -225,15 +255,21 @@ The same hooks run on web, React Native and Electron. `storage` adapts to `local
 | `useInviteUser()` | Send invitation with role |
 | `useResendInvitation()` | Resend invitation email |
 | `useCancelInvitation()` | Cancel pending invitation |
-| `useAcceptInvitation()` | Accept invitation by token |
+| `useAcceptInvitation()` | Accept invitation by token (does not start a session) |
 
 ### Utilities
 
 | Export | Description |
 |--------|-------------|
-| `configureApi(options)` | Configure API base URL, tenancy, and handlers |
+| `configureApi(options)` | Configure API base URL, tenancy, route-group data paths, timeout, credentials, storage and handlers |
 | `api` | Pre-configured Axios instance |
-| `storage` | Platform-agnostic storage (localStorage / AsyncStorage) |
+| `buildModelUrl(model, options?, target?)` | The URL a model hook requests, usable outside React |
+| `modelKeys` | The query keys the model hooks register (`.index`, `.infinite`, `.show`, `.computed`, `.trashed`, `.audit`, `.all`) |
+| `fetchModelIndex` / `fetchModelShow` | The hooks' requests as plain async functions, for `fetchQuery` / `prefetchQuery` |
+| `storage` | Platform-agnostic synchronous storage (localStorage / AsyncStorage) |
+| `STORAGE_KEYS` | Every storage key the library reads or writes |
+| `initStorage()` | Load the stored session into memory on React Native (await before rendering) |
+| `setStorageAdapter(adapter)` | Swap the storage adapter at runtime |
 | `events` | Event emitter for cross-component communication |
 | `extractPaginationFromHeaders(response)` | Parse pagination from response headers |
 | `cn(...classes)` | CSS class merging utility (clsx + tailwind-merge) |
@@ -273,6 +309,11 @@ import type {
   NestedOperation,
   Invitation,
   InvitationStatus,
+  ModelQueryHookOptions,
+  ModelInfiniteQueryHookOptions,
+  ModelMutationHookOptions,
+  TenancyMode,
+  StorageAdapter,
 } from '@rhino-dev/rhino-react';
 ```
 
@@ -284,13 +325,13 @@ generics. See [TypeScript](./typescript).
 
 | Page | Read it for |
 |---|---|
-| [Authentication](./authentication) | Login, logout, organization context, group-aware auth, tenancy modes |
-| [CRUD Hooks](./crud-hooks) | Index, show, store, update, delete; errors and cache invalidation |
-| [Querying](./querying) | Filters, sorts, search, scopes, computed attributes, includes, pagination |
+| [Authentication](./authentication) | Login, logout, sessions, organization context, group-aware auth, tenancy and data URLs |
+| [CRUD Hooks](./crud-hooks) | Index, show, store, update, delete; TanStack Query options, file uploads, errors and cache invalidation |
+| [Querying](./querying) | Filters, sorts, search, scopes, computed attributes, includes, pagination, infinite scroll |
 | [Soft Deletes](./soft-deletes) | Trashed, restore, force delete |
 | [Nested Operations](./nested-operations) | Atomic multi-model transactions |
 | [Invitations](./invitations) | Inviting users into organizations |
-| [Utilities](./utilities) | API client, storage, events, toast, audit |
+| [Utilities](./utilities) | API client, storage, events, URL builder, query keys and fetchers for code outside React, toast, audit |
 | [TypeScript](./typescript) | Generic hooks and auto-generated types |
 | [Desktop / Electron](./desktop-electron) | Main/preload/renderer wiring and custom storage |
 | [React Native](../react-native/getting-started) | Platform adapters and mobile setup |

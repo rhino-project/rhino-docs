@@ -10,7 +10,9 @@ import TabItem from '@theme/TabItem';
 
 Execute multi-model atomic transactions from the client. Create parent and child records in a single request, with automatic rollback if anything fails.
 
-## useNestedOperations()
+## useNestedOperations(mutationOptions?)
+
+The optional [`mutationOptions`](./crud-hooks#mutation-options) take any `useMutation` option except `mutationFn`. On success the hook invalidates the index, infinite and show queries of every model named in the operations, then runs your `onSuccess`.
 
 ```tsx title="src/hooks/useNestedOperations.ts"
 import { useNestedOperations } from '@rhino-dev/rhino-react';
@@ -28,7 +30,17 @@ nestedOps.mutate({
 });
 ```
 
-**API Request:** `POST /api/{organization}/nested`
+**API Request:** `POST /api/{organization}/nested` (the base follows [`tenancy` and `routeGroupInDataPath`](./authentication#tenancy-and-data-urls), like every data hook)
+
+The `nested` segment is the servers' default. If your server changes its nested-operations `path` setting (see the server's [Nested Operations](../laravel/nested-operations)), give the client the same value:
+
+```tsx title="src/main.tsx"
+configureApi({ nestedPath: 'batch' }); // POST /api/{organization}/batch
+```
+
+:::note Route groups
+The servers register the nested endpoint under the `tenant` route group only. With [`routeGroupInDataPath`](./authentication#tenancy-and-data-urls) the hook posts to `/{routeGroup}/…/nested`, which exists only when that group is the server's tenant group.
+:::
 
 ## Operation Types
 

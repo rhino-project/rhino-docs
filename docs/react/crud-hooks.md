@@ -10,6 +10,8 @@ import TabItem from '@theme/TabItem';
 
 Complete CRUD operations with TanStack Query -- zero boilerplate. Every hook automatically scopes requests to the current organization, manages caching, and invalidates related queries on mutation success.
 
+Every hook also takes a trailing TanStack Query options argument -- `queryOptions` on the query hooks, `mutationOptions` on the mutation hooks -- for polling, dependent queries, `select`, `staleTime`, `onSuccess` and the rest. See [TanStack Query Options](#tanstack-query-options).
+
 All five hooks are imported from `@rhino-dev/rhino-react`:
 
 ```tsx title="src/hooks/crud.ts"
@@ -24,7 +26,7 @@ import {
 
 ---
 
-## useModelIndex(model, options?)
+## useModelIndex(model, options?, queryOptions?)
 
 Fetch a paginated list of records with filtering, sorting, search, and more.
 
@@ -49,6 +51,11 @@ const pagination = response?.pagination;
 |---|---|---|
 | `model` | `string` | The model name matching your API resource (e.g., `'posts'`, `'users'`). |
 | `options` | `ModelQueryOptions` | Optional. Filtering, sorting, pagination, search, includes, and field selection. |
+| `queryOptions` | `ModelQueryHookOptions` | Optional. Any `useQuery` option except `queryKey` and `queryFn` -- see [TanStack Query Options](#tanstack-query-options). |
+
+The full signature is `useModelIndex<T, TData = QueryResponse<T>>(model, options?, queryOptions?)`. `TData` is the type `select` returns, and it becomes the type of `data`.
+
+For a "load more" or infinite-scroll list that accumulates pages, use [`useModelInfinite`](./querying#infinite-scroll) instead.
 
 ### Return Value
 
@@ -355,7 +362,7 @@ When the user changes search or filter values, reset `page` back to `1`. Otherwi
 
 ---
 
-## useModelShow(model, id, options?)
+## useModelShow(model, id, options?, queryOptions?)
 
 Fetch a single record by ID with optional relationship eager-loading.
 
@@ -372,6 +379,9 @@ const { data: post, isLoading, error } = useModelShow('posts', 42, {
 | `model` | `string` | The model name (e.g., `'posts'`). |
 | `id` | `string \| number` | The record ID. The query is disabled when `id` is falsy. |
 | `options` | `ModelQueryOptions` | Optional. Supports `includes`, `fields`, `filters`, and `sort`. |
+| `queryOptions` | `ModelQueryHookOptions` | Optional. Any `useQuery` option except `queryKey` and `queryFn`. `enabled` can only narrow the hook's own guard: the query never runs without an `id`. See [TanStack Query Options](#tanstack-query-options). |
+
+The full signature is `useModelShow<T, TData = T>(model, id, options?, queryOptions?)`.
 
 :::info
 The `id` argument is whatever the server's **route key** expects in the URL. For models with a configured route key (see the server's [Models — Route Key](../laravel/models.md#route-key)), pass the route-key value — e.g., `useModelShow('jobs', job.hash_id)` — no client-side configuration is needed. Because react-query cache keys embed the value you pass, use the route key consistently across index, show, and mutations so invalidation and cache hits line up.
@@ -534,7 +544,7 @@ The query is automatically **disabled** when `id` is falsy (`null`, `undefined`,
 
 ---
 
-## useModelStore(model)
+## useModelStore(model, mutationOptions?)
 
 Create a new record via a POST request. Returns a TanStack Query mutation object.
 
@@ -555,6 +565,7 @@ createPost.mutate(
 | Parameter | Type | Description |
 |---|---|---|
 | `model` | `string` | The model name (e.g., `'posts'`). |
+| `mutationOptions` | `ModelMutationHookOptions` | Optional. Any `useMutation` option except `mutationFn` -- see [TanStack Query Options](#mutation-options). |
 
 ### Mutation Input
 
@@ -563,6 +574,8 @@ Pass the new record data directly to `mutate()`:
 ```tsx title="src/components/CreatePostForm.tsx"
 createPost.mutate({ title: 'My Post', body: 'Content here', status: 'draft' });
 ```
+
+Pass a `FormData` instead to upload files -- it is sent as `multipart/form-data`. See [File Uploads](#file-uploads).
 
 ### Return Value
 
@@ -578,7 +591,7 @@ createPost.mutate({ title: 'My Post', body: 'Content here', status: 'draft' });
 | `reset()` | `function` | Reset the mutation state back to idle. |
 
 :::info
-On success, `useModelStore` automatically invalidates all `useModelIndex` and `useModelShow` queries for the same model. Your lists refresh without any manual cache management.
+On success, `useModelStore` automatically invalidates all `useModelIndex`, `useModelInfinite` and `useModelShow` queries for the same model. Your lists refresh without any manual cache management.
 :::
 
 ### Create Form Example
@@ -750,9 +763,9 @@ function CreatePostForm() {
 
 ---
 
-## useModelUpdate(model)
+## useModelUpdate(model, mutationOptions?)
 
-Update an existing record via a PUT request. Returns a TanStack Query mutation object.
+Update an existing record via a PUT request (or a `POST` with an `X-HTTP-Method-Override: PUT` header when you pass `FormData` -- see [File Uploads](#file-uploads)). Returns a TanStack Query mutation object.
 
 ```tsx title="src/components/EditPostForm.tsx"
 const updatePost = useModelUpdate('posts');
@@ -770,6 +783,7 @@ updatePost.mutate(
 | Parameter | Type | Description |
 |---|---|---|
 | `model` | `string` | The model name (e.g., `'posts'`). |
+| `mutationOptions` | `ModelMutationHookOptions` | Optional. Any `useMutation` option except `mutationFn` -- see [TanStack Query Options](#mutation-options). |
 
 ### Mutation Input
 
@@ -785,14 +799,14 @@ updatePost.mutate({
 | Property | Type | Description |
 |---|---|---|
 | `id` | `string \| number` | The ID of the record to update. For models with a server-side [route key](../laravel/models.md#route-key), pass the route-key value (e.g., `job.hash_id`). |
-| `data` | `Record<string, any>` | The fields to update. Only include changed fields. |
+| `data` | `Record<string, any> \| FormData` | The fields to update. Only include changed fields. A `FormData` uploads files -- see [File Uploads](#file-uploads). |
 
 ### Return Value
 
 Same mutation shape as `useModelStore` -- see the table above for `mutate`, `isPending`, `isSuccess`, `error`, etc.
 
 :::info
-On success, `useModelUpdate` automatically invalidates all `useModelIndex` and `useModelShow` queries for the same model, ensuring your UI stays in sync.
+On success, `useModelUpdate` automatically invalidates all `useModelIndex`, `useModelInfinite` and `useModelShow` queries for the same model, ensuring your UI stays in sync.
 :::
 
 ### Edit Form Example
@@ -1018,7 +1032,7 @@ function EditPostForm({ postId, onSaved }) {
 
 ---
 
-## useModelDelete(model)
+## useModelDelete(model, mutationOptions?)
 
 Soft delete a record via a DELETE request. Returns a TanStack Query mutation object.
 
@@ -1035,6 +1049,7 @@ deletePost.mutate(42, {
 | Parameter | Type | Description |
 |---|---|---|
 | `model` | `string` | The model name (e.g., `'posts'`). |
+| `mutationOptions` | `ModelMutationHookOptions` | Optional. Any `useMutation` option except `mutationFn` -- see [TanStack Query Options](#mutation-options). |
 
 ### Mutation Input
 
@@ -1051,7 +1066,7 @@ For models with a server-side [route key](../laravel/models.md#route-key), pass 
 Same mutation shape as `useModelStore` -- see the table above for `mutate`, `isPending`, `isSuccess`, `error`, etc.
 
 :::info
-On success, `useModelDelete` automatically invalidates all `useModelIndex` and `useModelShow` queries for the same model.
+On success, `useModelDelete` automatically invalidates all `useModelIndex`, `useModelInfinite` and `useModelShow` queries for the same model.
 :::
 
 :::tip
@@ -1133,6 +1148,167 @@ function DeleteButton({ postId, onDeleted }) {
 
 </TabItem>
 </Tabs>
+
+---
+
+## File Uploads
+
+`useModelStore` and `useModelUpdate` accept a `FormData` wherever they accept a plain object. Append your fields and files to it and pass it to `mutate()`:
+
+```tsx title="src/components/AvatarUpload.tsx"
+import { useModelStore, useModelUpdate } from '@rhino-dev/rhino-react';
+
+function AvatarUpload({ userId }: { userId: number }) {
+  const createDocument = useModelStore('documents');
+  const updateUser = useModelUpdate('users');
+
+  const upload = (file: File) => {
+    // Create: POST /api/{organization}/documents (multipart/form-data)
+    const doc = new FormData();
+    doc.append('title', file.name);
+    doc.append('file', file);
+    createDocument.mutate(doc);
+
+    // Update: POST /api/{organization}/users/{id} + X-HTTP-Method-Override: PUT (multipart/form-data)
+    const form = new FormData();
+    form.append('avatar', file);
+    updateUser.mutate({ id: userId, data: form });
+  };
+
+  return <input type="file" onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />;
+}
+```
+
+| Hook | Plain object | `FormData` |
+|---|---|---|
+| `useModelStore` | `POST {url}` as JSON | `POST {url}` as `multipart/form-data` |
+| `useModelUpdate` | `PUT {url}/{id}` as JSON | `POST {url}/{id}` as `multipart/form-data`, with the header `X-HTTP-Method-Override: PUT` |
+
+A file update goes out as `POST` because PHP does not parse a multipart body on a `PUT` request. The `X-HTTP-Method-Override: PUT` header tells Laravel to route it as an update.
+
+The override is a header, not a `_method` form field, on purpose: Rhino treats every form field as an attribute of the record, so a `_method` field is rejected with `403` ("not allowed to set the following field(s): _method") whenever the policy restricts which attributes may be written. If you append your own `_method` to the form anyway, the hook sends the form as is and leaves the header out.
+
+The file itself is an attribute like any other: the field name must be writable under the model's policy and accepted by its validation rules (for example `'avatar' => 'nullable|file'`).
+
+:::note Cross-origin browsers
+`X-HTTP-Method-Override` is a custom header, so a cross-origin browser request needs it in the server's CORS `allowed_headers`. Laravel's default (`*`) already allows it. React Native is not subject to CORS.
+:::
+
+:::note Rails and NestJS backends
+Method override is honored by Laravel out of the box. A Rails API-only app does not include `Rack::MethodOverride` (which reads the same header), and NestJS has no method override by default, so a `FormData` update reaches those servers as a plain `POST`. Add a method-override middleware on the server, or send the update as JSON.
+:::
+
+On React Native, append a file as an object with `uri`, `name` and `type` -- the shape React Native's `FormData` uploads:
+
+```tsx title="src/screens/ProfilePhoto.tsx"
+import { useModelUpdate } from '@rhino-dev/rhino-react';
+
+function useUploadPhoto(userId: number) {
+  const updateUser = useModelUpdate('users');
+
+  return (asset: { uri: string; fileName?: string; mimeType?: string }) => {
+    const form = new FormData();
+    form.append('photo', {
+      uri: asset.uri,
+      name: asset.fileName ?? 'photo.jpg',
+      type: asset.mimeType ?? 'image/jpeg',
+    } as any);
+
+    return updateUser.mutateAsync({ id: userId, data: form });
+  };
+}
+```
+
+The cache invalidation is the same as for a JSON mutation.
+
+---
+
+## TanStack Query Options
+
+Every hook takes the TanStack Query options you would pass to `useQuery` or `useMutation` as its **last** argument. The hook keeps ownership of the request and the cache key; everything else is yours.
+
+### Query options
+
+The query hooks take an optional trailing `queryOptions`:
+
+```tsx
+useModelIndex<T, TData>(model, options?, queryOptions?)
+useModelShow<T, TData>(model, id, options?, queryOptions?)
+useModelTrashed<T, TData>(model, options?, queryOptions?)
+useModelComputedAttributes<T, TData>(model, options?, queryOptions?)
+useModelAudit<TData>(model, id, options?, queryOptions?)
+```
+
+Its type is `ModelQueryHookOptions` -- `UseQueryOptions` without `queryKey` and `queryFn`, which the hook builds itself. `staleTime`, `gcTime`, `refetchInterval`, `refetchOnWindowFocus`, `placeholderData`, `retry`, `select` and `enabled` all pass through.
+
+Poll a record while a screen is open:
+
+```tsx title="src/screens/TripStatus.tsx"
+const { data: trip } = useModelShow<Trip>('trips', tripId, {}, {
+  refetchInterval: 15_000, // GET /api/{organization}/trips/{tripId} every 15 s
+});
+```
+
+Wait for one query before starting another:
+
+```tsx title="src/screens/TripStops.tsx"
+const { data: trip } = useModelShow<Trip>('trips', tripId);
+
+const { data: stops } = useModelIndex<Stop>(
+  'stops',
+  { filters: { trip_id: trip?.id } },
+  { enabled: !!trip }, // no request until the trip has loaded
+);
+```
+
+Reshape the data with `select`. Its return type flows into `data` through the second generic:
+
+```tsx title="src/components/PostTitles.tsx"
+const { data: titles } = useModelIndex<Post, string[]>('posts', {}, {
+  select: (response) => response.data.map((post) => post.title),
+});
+// titles: string[] | undefined
+```
+
+The rules:
+
+- **`enabled` narrows, never widens.** It is AND-ed with the hook's own guard -- an organization in context (in `'path'` tenancy) and, for `useModelShow` / `useModelAudit`, an `id`. `enabled: true` does not make a show query run without an `id`. Both TanStack Query v5 forms work: a boolean, and a function of the query.
+- **`queryKey` and `queryFn` cannot be overridden.** The hook always uses its own.
+- **Query keys never include `queryOptions`.** Two components that call `useModelIndex('posts', { page: 1 })` with different `queryOptions` share one cache entry and one request. `select` runs per component, so each can shape the shared data differently.
+
+### Mutation options
+
+The mutation hooks take an optional trailing `mutationOptions`:
+
+```tsx
+useModelStore<T, TContext>(model, mutationOptions?)
+useModelUpdate<T, TContext>(model, mutationOptions?)
+useModelDelete<T, TContext>(model, mutationOptions?)
+useModelRestore<T, TContext>(model, mutationOptions?)
+useModelForceDelete<T, TContext>(model, mutationOptions?)
+useNestedOperations<TContext>(mutationOptions?)
+```
+
+Its type is `ModelMutationHookOptions` -- `UseMutationOptions` without `mutationFn`. Use it for behavior that belongs to every call of the hook: a toast, navigation, an optimistic update, extra invalidation.
+
+```tsx title="src/screens/NewTrip.tsx"
+const createTrip = useModelStore<Trip>('trips', {
+  onSuccess: (trip) => navigation.navigate('Trip', { id: trip.id }),
+  onError: (error) => toast(error.message),
+});
+
+createTrip.mutate({ origin, destination }, {
+  onSuccess: () => analytics.track('trip_created'), // per-call callback
+});
+```
+
+The order on success is fixed:
+
+1. The hook's built-in cache invalidation (see [Automatic Cache Invalidation](#automatic-cache-invalidation)).
+2. Your hook-level `onSuccess`.
+3. Any per-call `onSuccess` passed to `mutate()` / `mutateAsync()`.
+
+`onMutate`, `onError` and `onSettled` pass through unchanged; `mutationFn` cannot be overridden.
 
 ---
 
@@ -1227,11 +1403,23 @@ All mutation hooks automatically invalidate related queries on success. You do n
 
 | Hook | Invalidates |
 |---|---|
-| `useModelStore` | `useModelIndex` + `useModelShow` for the same model |
-| `useModelUpdate` | `useModelIndex` + `useModelShow` for the same model |
-| `useModelDelete` | `useModelIndex` + `useModelShow` for the same model |
+| `useModelStore` | `useModelIndex` + `useModelInfinite` + `useModelShow` for the same model |
+| `useModelUpdate` | `useModelIndex` + `useModelInfinite` + `useModelShow` for the same model |
+| `useModelDelete` | `useModelIndex` + `useModelInfinite` + `useModelShow` for the same model |
+| `useModelRestore` | `useModelIndex` + `useModelInfinite` + `useModelTrashed` + `useModelShow` for the same model |
+| `useModelForceDelete` | `useModelTrashed` for the same model |
+| `useNestedOperations` | `useModelIndex` + `useModelInfinite` + `useModelShow` for every model named in the operations |
 
-This means that after creating, updating, or deleting a record, any component using `useModelIndex` or `useModelShow` for that model will automatically refetch its data.
+This means that after creating, updating, or deleting a record, any component using `useModelIndex`, `useModelInfinite` or `useModelShow` for that model will automatically refetch its data.
+
+To invalidate or prefetch these queries yourself -- from a push-notification handler, a websocket message, or a mutation the hooks do not cover -- use [`modelKeys`](./utilities#modelkeys), which returns the exact keys the hooks register:
+
+```tsx
+import { modelKeys } from '@rhino-dev/rhino-react';
+
+queryClient.invalidateQueries({ queryKey: modelKeys.index('posts') }); // every posts list
+queryClient.invalidateQueries(modelKeys.all('posts'));                 // every posts query of any kind
+```
 
 ---
 
@@ -1729,14 +1917,15 @@ function CreateForm({ onCreated }) {
 </Tabs>
 
 :::warning
-All CRUD hooks require an active organization context. If `useOrganization()` returns `null`, query hooks will return an error state and mutation hooks will throw. Make sure your component tree is wrapped with the proper providers and that the user has selected an organization. See [Authentication](./authentication) for setup details.
+In the default `'path'` [tenancy](./authentication#tenancy-and-data-urls), every CRUD hook needs an active organization. If `useOrganization()` returns `null`, query hooks stay idle (no request is made) and mutation hooks throw. Make sure the user has selected an organization -- `login()` stores the first one it receives. With `tenancy: 'subdomain'` or `'none'` no organization is required. See [Authentication](./authentication) for setup details.
 :::
 
 ---
 
 ## Next Steps
 
-- [Querying](./querying) -- deep dive into filters, sorts, search, and pagination
+- [Querying](./querying) -- deep dive into filters, sorts, search, pagination and infinite scroll
+- [Utilities](./utilities) -- `modelKeys`, `buildModelUrl` and the plain fetchers for code outside React
 - [Soft Deletes](./soft-deletes) -- trash, restore, and permanent delete hooks
 - [Nested Operations](./nested-operations) -- atomic multi-model transactions
 - [Authentication](./authentication) -- login, logout, and organization context

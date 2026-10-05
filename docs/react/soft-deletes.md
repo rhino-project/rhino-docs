@@ -10,9 +10,9 @@ import TabItem from '@theme/TabItem';
 
 Hooks for the full soft-delete lifecycle — list trashed items, restore them, or permanently delete.
 
-## useModelTrashed(model, options?)
+## useModelTrashed(model, options?, queryOptions?)
 
-Fetch soft-deleted records. Accepts the same query options as `useModelIndex` (filters, sorts, pagination, search, includes).
+Fetch soft-deleted records. Accepts the same query options as `useModelIndex` (filters, sorts, pagination, search, includes, scope), and the same trailing [`queryOptions`](./crud-hooks#tanstack-query-options).
 
 ```tsx title="src/hooks/useModelTrashed.ts"
 import { useModelTrashed } from '@rhino-dev/rhino-react';
@@ -30,9 +30,9 @@ const pagination = response?.pagination;
 
 **API Request:** `GET /api/{organization}/posts/trashed?sort=-deleted_at&page=1&per_page=20&include=user`
 
-## useModelRestore(model)
+## useModelRestore(model, mutationOptions?)
 
-Restore a soft-deleted record. Clears the `deleted_at` timestamp and makes the record visible again.
+Restore a soft-deleted record. Clears the `deleted_at` timestamp and makes the record visible again. On success it invalidates the model's index, infinite, trashed and show queries. The optional [`mutationOptions`](./crud-hooks#mutation-options) take any `useMutation` option except `mutationFn`.
 
 ```tsx title="src/hooks/useModelRestore.ts"
 import { useModelRestore } from '@rhino-dev/rhino-react';
@@ -52,9 +52,9 @@ restore.mutate(postId, {
 
 **API Request:** `POST /api/{organization}/posts/{id}/restore`
 
-## useModelForceDelete(model)
+## useModelForceDelete(model, mutationOptions?)
 
-Permanently delete a record from the database. This cannot be undone.
+Permanently delete a record from the database. This cannot be undone. On success it invalidates the model's trashed queries. The optional [`mutationOptions`](./crud-hooks#mutation-options) take any `useMutation` option except `mutationFn`.
 
 ```tsx title="src/hooks/useModelForceDelete.ts"
 import { useModelForceDelete } from '@rhino-dev/rhino-react';

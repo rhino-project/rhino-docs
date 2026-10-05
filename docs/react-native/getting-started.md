@@ -5,98 +5,166 @@ title: Getting Started
 
 # React Native — Getting Started
 
-Same Rhino hooks, adapted for native. Built on Expo with SecureStore, AsyncStorage, and platform-aware networking.
+React Native apps use the same package as the web: `@rhino-dev/rhino-react`. The hooks, their
+signatures and their return values are identical; only storage and events swap to native
+implementations, and that happens automatically when Metro bundles the app. It works on bare React
+Native and on Expo.
 
-## Tech Stack
-
-- **Expo SDK 54** — managed React Native workflow
-- **React 19** + **React Native 0.81**
-- **Expo Router** — file-based routing
-- **TanStack Query** — server state management
-- **NativeWind 4** — Tailwind CSS for React Native
-- **Expo SecureStore** — encrypted token storage
-- **AsyncStorage** — general persistence
-
-## Quick Start
+## Installation
 
 ```bash title="terminal"
-# Clone the template
-git clone https://github.com/rhino-project/rhino-react-native-template
-cd rhino-react-native-template
-
-# Install dependencies
-npm install
-
-# Start Expo dev server
-npm start
+npm install @rhino-dev/rhino-react @tanstack/react-query axios @react-native-async-storage/async-storage
 ```
 
-Run on devices:
+On bare React Native, install the iOS pods for AsyncStorage afterwards (`npx pod-install`). Expo
+projects can use `npx expo install @react-native-async-storage/async-storage` to get the version that
+matches their SDK.
 
-```bash title="terminal"
-npm run ios       # iPhone simulator
-npm run android   # Android emulator
-npm run web       # Web browser (testing)
-```
+### How the native build is picked
 
-## Project Structure
+The package's `react-native` entry points Metro at its source (`src/index.ts`), so Metro resolves
+platform files the usual way:
 
-``` title="Project Structure"
-app/                        # Expo Router file-based routing
-├── (auth)/                 # Public routes
-│   └── login.tsx
-├── (app)/                  # Protected routes (drawer nav)
-│   ├── _layout.tsx
-│   └── ...screens
-├── _layout.tsx             # Root with providers
-└── index.tsx
+| Module | Web | React Native |
+|---|---|---|
+| `storage` | `storage.js` — `localStorage` | `storage.native.js` — AsyncStorage behind a synchronous in-memory cache |
+| `events` | `events.js` — `window` `StorageEvent` (cross-tab) | `events.native.js` — an in-memory emitter |
 
-src/
-├── lib/
-│   └── rhino-rn/          # Platform adapter layer
-│       ├── storage.ts      # SecureStore + AsyncStorage
-│       ├── api-client.ts   # Platform-aware Axios
-│       ├── context/        # Auth & Org providers
-│       └── hooks/          # CRUD hooks
-├── components/
-│   ├── ui/                 # Button, Input, etc.
-│   └── features/           # Screen components
-└── config/
-    ├── query-client.ts
-    └── env.ts
-```
+Nothing to configure: you import from `@rhino-dev/rhino-react` and get the native adapters. See
+[Platform Adapters](./platform-adapters) for how they behave.
 
-## API Configuration
+## Setup
 
-The API client auto-detects the platform:
+### 1. Configure the API client
 
-```typescript title="src/lib/rhino-rn/api-client.ts"
-const API_CONFIG = {
+```tsx title="src/rhino.ts"
+import { Platform } from 'react-native';
+import { configureApi } from '@rhino-dev/rhino-react';
+
+configureApi({
   baseURL: __DEV__
     ? Platform.select({
-        ios: 'http://localhost:8000/api',
-        android: 'http://10.0.2.2:8000/api',  // Android emulator
+        android: 'http://10.0.2.2:8000/api', // the host machine, from the Android emulator
         default: 'http://localhost:8000/api',
       })
-    : 'https://api.production.com/api',
-};
+    : 'https://api.yourapp.com/api',
+  withCredentials: false, // bearer token, no cookies
+  timeout: 20_000,        // 20-30 s suits mobile networks
+  onUnauthorized: () => {
+    // Optional: the session is already cleared and AuthProvider has reset.
+    // Use it for side effects such as a "Session expired" toast.
+  },
+});
 ```
 
-## Usage
+`withCredentials` defaults to `true` (Sanctum cookie auth on web) and there is no timeout by default,
+so set both on native. `onUnauthorized` is optional on native: the web default redirects through
+`window.location`, which React Native does not have, so without a handler a 401 simply clears the
+session and [navigation follows `isAuthenticated`](#3-navigate-on-isauthenticated). See [Utilities — configureApi](../react/utilities#configureapioptions)
+for every option, including `tenancy` and `routeGroupInDataPath`.
 
-Hooks work identically to the web client:
+### 2. Load storage, then render
 
-```tsx title="src/screens/UsersList.tsx"
-import { useModelIndex, useAuth } from '../lib/rhino-rn';
+The hooks read storage synchronously, so the session saved in AsyncStorage has to be in memory before
+the first render. Call `await initStorage()` once at startup:
 
-function UsersList() {
-  const { data: response } = useModelIndex('users');
+```tsx title="App.tsx"
+import { useEffect, useState } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { AuthProvider, initStorage } from '@rhino-dev/rhino-react';
+import './src/rhino'; // runs configureApi
+import { RootNavigator } from './src/navigation/RootNavigator';
+import { SplashScreen } from './src/screens/SplashScreen';
+
+const queryClient = new QueryClient();
+
+export default function App() {
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    initStorage().then(() => setReady(true));
+  }, []);
+
+  if (!ready) return <SplashScreen />;
+
+  return (
+    <QueryClientProvider client={queryClient}>
+      <AuthProvider>
+        <RootNavigator />
+      </AuthProvider>
+    </QueryClientProvider>
+  );
+}
+```
+
+`initStorage()` restores the token, the user, the organization and the route group. Render
+`AuthProvider` before it resolves and the app starts logged out.
+
+### 3. Navigate on `isAuthenticated`
+
+Navigation belongs to your app — React Navigation, Expo Router, or anything else. Drive it from
+`useAuth().isAuthenticated`, which follows every way a session starts or ends: `login()`,
+`useRegister`, `logout()` and a 401 from the API.
+
+```tsx title="src/navigation/RootNavigator.tsx"
+import { NavigationContainer } from '@react-navigation/native';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { useAuth } from '@rhino-dev/rhino-react';
+
+const Stack = createNativeStackNavigator();
+
+export function RootNavigator() {
+  const { isAuthenticated } = useAuth();
+
+  return (
+    <NavigationContainer>
+      <Stack.Navigator>
+        {isAuthenticated ? (
+          <>
+            <Stack.Screen name="Trips" component={TripsScreen} />
+            <Stack.Screen name="Trip" component={TripScreen} />
+          </>
+        ) : (
+          <Stack.Screen name="Login" component={LoginScreen} />
+        )}
+      </Stack.Navigator>
+    </NavigationContainer>
+  );
+}
+```
+
+When a token expires, the next request gets a 401, the client clears the session, and this navigator
+switches to the login screen by itself — there is no auth state to mirror in a store of your own.
+
+### 4. Use the hooks
+
+```tsx title="src/screens/TripsScreen.tsx"
+import { FlatList, Text } from 'react-native';
+import { useModelIndex } from '@rhino-dev/rhino-react';
+
+export function TripsScreen() {
+  const { data: response, refetch, isRefetching } = useModelIndex<Trip>('trips', {
+    sort: '-created_at',
+  });
 
   return (
     <FlatList
-      data={response?.data || []}
-      renderItem={({ item }) => <Text>{item.name}</Text>}
+      data={response?.data ?? []}
+      keyExtractor={(trip) => String(trip.id)}
+      renderItem={({ item }) => <Text>{item.destination}</Text>}
+      onRefresh={refetch}
+      refreshing={isRefetching}
     />
   );
 }
 ```
+
+Everything on the web docs applies unchanged — [CRUD Hooks](../react/crud-hooks),
+[Querying](../react/querying), [Authentication](../react/authentication). [Hooks](./hooks) lists the
+signatures with native examples: infinite lists, polling, photo uploads.
+
+## Related
+
+- [Hooks](./hooks) — every hook signature, with React Native examples
+- [Platform Adapters](./platform-adapters) — storage, events, custom secure storage
+- [React Client — Getting Started](../react/getting-started) — the full feature map

@@ -8,7 +8,9 @@ import TabItem from '@theme/TabItem';
 
 # Querying
 
-This is for the `@rhino-dev/rhino-react` React client library. All query options work with `useModelIndex`, `useModelShow`, and `useModelTrashed`.
+This is for the `@rhino-dev/rhino-react` React client library. All query options work with `useModelIndex`, `useModelInfinite`, `useModelShow`, and `useModelTrashed`.
+
+`ModelQueryOptions` describes **what** to fetch -- it becomes the URL and the cache key. **How** to fetch it -- polling, `enabled`, `select`, `staleTime` -- goes in the hook's separate trailing `queryOptions` argument, covered in [CRUD Hooks -- TanStack Query Options](./crud-hooks#tanstack-query-options).
 
 ## Query Options
 
@@ -853,6 +855,83 @@ function PaginatedPosts() {
 </TabItem>
 </Tabs>
 
+## Infinite Scroll — `useModelInfinite` {#infinite-scroll}
+
+For a "load more" button or an infinite-scroll list, use `useModelInfinite`. It requests the same URL as `useModelIndex`, one page at a time, and keeps every page it has loaded:
+
+```tsx title="src/components/PostFeed.tsx"
+import { useModelInfinite } from '@rhino-dev/rhino-react';
+
+function PostFeed() {
+  const { data, pagination, fetchNextPage, hasNextPage, isFetchingNextPage } =
+    useModelInfinite<Post>('posts', { sort: '-created_at', perPage: 20 });
+
+  const posts = data?.pages.flatMap((page) => page.data) ?? [];
+
+  return (
+    <>
+      <ul>
+        {posts.map((post) => <li key={post.id}>{post.title}</li>)}
+      </ul>
+      {hasNextPage && (
+        <button onClick={() => fetchNextPage()} disabled={isFetchingNextPage}>
+          {isFetchingNextPage ? 'Loading…' : `Load more (${posts.length} of ${pagination?.total})`}
+        </button>
+      )}
+    </>
+  );
+}
+```
+
+```bash
+GET /api/{organization}/posts?sort=-created_at&page=1&per_page=20
+GET /api/{organization}/posts?sort=-created_at&page=2&per_page=20   # after fetchNextPage()
+```
+
+`useModelInfinite<T>(model, options?, queryOptions?)` is built on TanStack Query's `useInfiniteQuery`:
+
+| Behavior | Detail |
+|---|---|
+| Next page | Read from the [pagination headers](./utilities#extractpaginationfromheadersresponse) of the last loaded page: `currentPage + 1` while `currentPage < lastPage`. |
+| Last page | `hasNextPage` is `false` once `currentPage` reaches `lastPage`, and when the response carries no pagination headers. |
+| `options.page` | Ignored -- the hook drives the page. `perPage` (or `per_page`) is respected. |
+| `data` | `InfiniteData<QueryResponse<T>>`: `data.pages` holds one `{ data, pagination }` per loaded page. Flatten with `data.pages.flatMap((p) => p.data)`. |
+| `pagination` | Added to the standard infinite-query result: the pagination of the **most recently loaded** page, or `null` before one has loaded. A `select` in `queryOptions` does not affect it. |
+| `queryOptions` | `ModelInfiniteQueryHookOptions` -- `useInfiniteQuery` options without `queryKey`, `queryFn`, `initialPageParam`, `getNextPageParam` and `getPreviousPageParam`. `enabled` is AND-ed with the organization guard, as on every query hook. |
+| Cache key | [`modelKeys.infinite(model, options)`](./utilities#modelkeys), separate from the `useModelIndex` key. |
+| Invalidation | Every mutation that invalidates a model's `useModelIndex` lists also invalidates its infinite lists. |
+
+On React Native, wire `fetchNextPage` to `FlatList`'s `onEndReached`:
+
+```tsx title="src/screens/PostFeedScreen.tsx"
+import { FlatList, ActivityIndicator, Text } from 'react-native';
+import { useModelInfinite } from '@rhino-dev/rhino-react';
+
+function PostFeedScreen() {
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, refetch, isRefetching } =
+    useModelInfinite<Post>('posts', { sort: '-created_at', perPage: 20 });
+
+  return (
+    <FlatList
+      data={data?.pages.flatMap((page) => page.data) ?? []}
+      keyExtractor={(post) => String(post.id)}
+      renderItem={({ item }) => <Text>{item.title}</Text>}
+      onEndReached={() => {
+        if (hasNextPage && !isFetchingNextPage) fetchNextPage();
+      }}
+      onEndReachedThreshold={0.5}
+      onRefresh={refetch}
+      refreshing={isRefetching}
+      ListFooterComponent={isFetchingNextPage ? <ActivityIndicator /> : null}
+    />
+  );
+}
+```
+
+:::tip Which list hook?
+Use `useModelIndex` when the user picks a page (a table with Previous / Next) and `useModelInfinite` when pages append to what is already on screen (a feed, a mobile list).
+:::
+
 ## Eager Loading (Includes)
 
 Use `includes` to load related models in a single request, avoiding N+1 query problems.
@@ -1211,3 +1290,9 @@ function AdvancedPostsList() {
 :::tip
 Notice the `useEffect` that resets the page to 1 whenever filters, search, or sort change. This prevents the user from being stuck on an out-of-range page after narrowing results.
 :::
+
+## Related
+
+- [CRUD Hooks](./crud-hooks) -- hook signatures, TanStack Query options, file uploads and cache invalidation
+- [Soft Deletes](./soft-deletes) -- `useModelTrashed` takes the same query options
+- [Utilities](./utilities) -- `buildModelUrl`, `modelKeys` and the plain fetchers behind these hooks
