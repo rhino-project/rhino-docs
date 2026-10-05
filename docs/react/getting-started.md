@@ -333,6 +333,7 @@ generics. See [TypeScript](./typescript).
 | [Invitations](./invitations) | Inviting users into organizations |
 | [Utilities](./utilities) | API client, storage, events, URL builder, query keys and fetchers for code outside React, toast, audit |
 | [TypeScript](./typescript) | Generic hooks and auto-generated types |
+| [Release Notes](./release-notes) | What changed in each version, and how to upgrade |
 | [Desktop / Electron](./desktop-electron) | Main/preload/renderer wiring and custom storage |
 | [React Native](../react-native/getting-started) | Platform adapters and mobile setup |
 

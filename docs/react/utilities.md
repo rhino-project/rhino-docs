@@ -445,30 +445,3 @@ interface AuditLog {
   created_at: string;
 }
 ```
-
-## Upgrading from 4.6
-
-`@rhino-dev/rhino-react` 4.7 requires no code changes. Every addition is an optional argument or a new export:
-
-| Addition | Where |
-|---|---|
-| Trailing `queryOptions` on `useModelIndex`, `useModelShow`, `useModelTrashed`, `useModelComputedAttributes`, `useModelAudit` | [TanStack Query Options](./crud-hooks#tanstack-query-options) |
-| Trailing `mutationOptions` on `useModelStore`, `useModelUpdate`, `useModelDelete`, `useModelRestore`, `useModelForceDelete`, `useNestedOperations` | [Mutation options](./crud-hooks#mutation-options) |
-| `FormData` bodies on `useModelStore` / `useModelUpdate` | [File Uploads](./crud-hooks#file-uploads) |
-| `useModelInfinite` | [Infinite Scroll](./querying#infinite-scroll) |
-| `tenancy: 'none'` and `routeGroupInDataPath` | [Tenancy and Data URLs](./authentication#tenancy-and-data-urls) |
-| `configureApi({ timeout, withCredentials, nestedPath })` | [configureApi](#configureapioptions) |
-| `buildModelUrl`, `modelKeys`, `fetchModelIndex`, `fetchModelShow` | [Outside React](#outside-react) |
-| `LoginResult.token`, `STORAGE_KEYS` | [LoginResult](./authentication#loginresult-type), [Keys Used Internally](#keys-used-internally) |
-
-Some behaviors differ without opting in:
-
-- **A 401 also resets `AuthProvider` and clears `user`.** In 4.6 only `token` was removed from storage, and `isAuthenticated` stayed `true` until the provider remounted. If your app mirrored auth state in its own store to work around that, the mirror can go.
-- **A rejected login no longer calls `onUnauthorized`.** A 401 from the login endpoint is reported by `login()` (`{ success: false, status: 401 }`) and leaves storage alone.
-- **`useRegister` starts a session.** When the backend returns a token, it is stored with the user and organization and `AuthProvider` becomes authenticated. If you called `login()` after registering to get there, that call is no longer needed.
-- **`useNestedOperations` posts to `/nested`.** That is the endpoint the servers register by default; 4.6 posted to `/nested-operations`, which a default server does not serve. If you set the server's nested `path` to `nested-operations` to match the old client, pass `configureApi({ nestedPath: 'nested-operations' })`.
-- **`AuthProvider` follows `token` changes.** On the web, signing in or out in one browser tab updates `useAuth()` in the other tabs of the same origin.
-- **`useOwner`, `useUserRole` and `useOrganizationExists` read the `{ data: [...] }` response envelope.** Against a current server, 4.6 returned the envelope itself from `useOwner()` and `hasRole()` was always `false`.
-- **`login()` notifies mounted hooks and stores the configured route group.** Data hooks mounted before the login start fetching when it resolves, and a group set through `configureApi({ routeGroup })` reaches `useRouteGroup()`.
-
-On React Native, `initStorage()` also restores `route_group` after a restart, so a group-aware session comes back in the group it signed into.

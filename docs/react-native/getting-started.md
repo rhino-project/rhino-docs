@@ -168,3 +168,4 @@ signatures with native examples: infinite lists, polling, photo uploads.
 - [Hooks](./hooks) — every hook signature, with React Native examples
 - [Platform Adapters](./platform-adapters) — storage, events, custom secure storage
 - [React Client — Getting Started](../react/getting-started) — the full feature map
+- [Release Notes](../react/release-notes) — what changed in each version of the package

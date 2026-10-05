@@ -116,6 +116,7 @@ const sidebars: SidebarsConfig = {
         'react/utilities',
         'react/typescript',
         'react/desktop-electron',
+        'react/release-notes',
       ],
     },
   ],
