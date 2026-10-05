@@ -1,19 +1,54 @@
-facebook:
-  label: Facebook
-  permalink: /facebook
-  description: Facebook tag description
+overview:
+  label: Overview
+  permalink: /overview
+  description: What Rhino is and who it is for, without the code
 
-hello:
-  label: Hello
-  permalink: /hello
-  description: Hello tag description
+for-founders:
+  label: For founders
+  permalink: /for-founders
+  description: Plain-language posts for founders, product people and anyone who does not write the code
 
-docusaurus:
-  label: Docusaurus
-  permalink: /docusaurus
-  description: Docusaurus tag description
+ai:
+  label: AI
+  permalink: /ai
+  description: Building with AI coding agents
 
-hola:
-  label: Hola
-  permalink: /hola
-  description: Hola tag description
+security:
+  label: Security
+  permalink: /security
+  description: Permissions, tenant isolation and audit trails
+
+engineering:
+  label: Engineering
+  permalink: /engineering
+  description: Technical posts with code
+
+laravel:
+  label: Laravel
+  permalink: /laravel
+  description: Posts covering the Laravel server
+
+rails:
+  label: Rails
+  permalink: /rails
+  description: Posts covering the Rails server
+
+nestjs:
+  label: NestJS
+  permalink: /nestjs
+  description: Posts covering the NestJS server
+
+react:
+  label: React
+  permalink: /react
+  description: Posts covering the React client
+
+querying:
+  label: Querying
+  permalink: /querying
+  description: Filters, scopes and computed attributes
+
+validation:
+  label: Validation
+  permalink: /validation
+  description: Request classes and write payloads

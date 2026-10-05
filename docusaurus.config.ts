@@ -53,7 +53,16 @@ const config: Config = {
           sidebarPath: './sidebars.ts',
           editUrl: 'https://github.com/rhino-project/rhino-docs/tree/main/',
         },
-        blog: false,
+        blog: {
+          blogTitle: 'Rhino Blog',
+          blogDescription: 'Plain-language explainers and engineering posts about Rhino 4.',
+          blogSidebarTitle: 'All posts',
+          blogSidebarCount: 'ALL',
+          showReadingTime: true,
+          onInlineTags: 'throw',
+          onInlineAuthors: 'throw',
+          onUntruncatedBlogPosts: 'throw',
+        },
         theme: {
           customCss: './src/css/custom.css',
         },
@@ -75,6 +84,7 @@ const config: Config = {
           type: 'custom-frameworkDropdown',
           position: 'left',
         },
+        {to: '/blog', label: 'Blog', position: 'left'},
         {
           href: 'https://github.com/rhino-project/rhino-laravel',
           label: 'GitHub',
@@ -103,6 +113,7 @@ const config: Config = {
         {
           title: 'More',
           items: [
+            { label: 'Blog', to: '/blog' },
             {
               label: 'GitHub',
               href: 'https://github.com/rhino-project/rhino-laravel',

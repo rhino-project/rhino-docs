@@ -51,6 +51,7 @@ function FooterCol({title, items}: {title: string; items: {label: string; href: 
 
 export function CTA() {
   const introUrl = useBaseUrl('/intro');
+  const blogUrl = useBaseUrl('/blog');
   const laravelUrl = useBaseUrl('/laravel/getting-started');
   const railsUrl = useBaseUrl('/rails/getting-started');
   const nestjsUrl = useBaseUrl('/nestjs/getting-started');
@@ -210,6 +211,7 @@ export function CTA() {
             title="More"
             items={[
               {label: 'Docs', href: introUrl},
+              {label: 'Blog', href: blogUrl},
               {label: 'GitHub', href: GITHUB_URL},
               {label: 'Blueprint', href: blueprintUrl},
             ]}

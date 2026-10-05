@@ -6,6 +6,7 @@ const GITHUB_URL = 'https://github.com/rhino-project';
 
 export function Nav() {
   const introUrl = useBaseUrl('/intro');
+  const blogUrl = useBaseUrl('/blog');
   const laravelStartUrl = useBaseUrl('/laravel/getting-started');
   return (
     <nav className="ag-nav">
@@ -21,6 +22,7 @@ export function Nav() {
             <a href="#features">Features</a>
             <a href="#demo">Demo</a>
             <a href={introUrl}>Docs</a>
+            <a href={blogUrl}>Blog</a>
           </div>
         </div>
         <div style={{display: 'flex', alignItems: 'center', gap: 10}}>
