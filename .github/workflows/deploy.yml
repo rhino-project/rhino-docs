@@ -28,10 +28,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # The site is served from the custom domain's root (rhino-project.org),
+      # so it builds with docusaurus.config.ts' defaults: that URL and baseUrl '/'.
       - name: Build website
-        env:
-          BASE_URL: /${{ github.event.repository.name }}/
-          SITE_URL: https://${{ github.repository_owner }}.github.io
         run: npm run build
 
       - name: Upload Build Artifact
